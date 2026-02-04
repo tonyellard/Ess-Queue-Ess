@@ -23,13 +23,29 @@ var queueManager = NewQueueManager()
 
 // SQS API Handler
 func sqsHandler(w http.ResponseWriter, r *http.Request) {
-	// Parse form data
-	if err := r.ParseForm(); err != nil {
-		sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
-		return
+	var action string
+
+	// AWS CLI/SDK can send requests in multiple formats:
+	// 1. Query protocol (form-encoded) - older style
+	// 2. JSON protocol with X-Amz-Target header - newer AWS CLI default
+
+	// Check for X-Amz-Target header (JSON protocol)
+	target := r.Header.Get("X-Amz-Target")
+	if target != "" {
+		// Extract action from target like "AmazonSQS.CreateQueue"
+		parts := strings.Split(target, ".")
+		if len(parts) == 2 {
+			action = parts[1]
+		}
+	} else {
+		// Fall back to Query protocol (form-encoded)
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		action = r.FormValue("Action")
 	}
 
-	action := r.FormValue("Action")
 	log.Printf("SQS Action: %s", action)
 
 	switch action {
@@ -54,14 +70,91 @@ func sqsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// getRequestParam extracts a parameter from either JSON body or form data
+func getRequestParam(r *http.Request, paramName string) string {
+	// Check if this is a JSON request (X-Amz-Target header present)
+	if r.Header.Get("X-Amz-Target") != "" {
+		// Parse JSON body
+		var jsonBody map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&jsonBody); err == nil {
+			if val, ok := jsonBody[paramName]; ok {
+				if strVal, ok := val.(string); ok {
+					return strVal
+				}
+			}
+		}
+		// Reset body for potential re-reads
+		return ""
+	}
+
+	// Fall back to form data
+	if r.Form == nil {
+		r.ParseForm()
+	}
+	return r.FormValue(paramName)
+}
+
+// parseRequestJSON parses the JSON body into a map
+func parseRequestJSON(r *http.Request) (map[string]interface{}, error) {
+	var jsonBody map[string]interface{}
+
+	// Read body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reset body for potential re-reads
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+
+	// Parse JSON
+	if err := json.Unmarshal(body, &jsonBody); err != nil {
+		return nil, err
+	}
+
+	return jsonBody, nil
+}
+
 func handleCreateQueue(w http.ResponseWriter, r *http.Request) {
-	queueName := r.FormValue("QueueName")
+	var queueName string
+	var attributes map[string]string
+
+	// Check if this is a JSON request
+	if r.Header.Get("X-Amz-Target") != "" {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+
+		if name, ok := jsonBody["QueueName"].(string); ok {
+			queueName = name
+		}
+
+		// Parse attributes from JSON
+		attributes = make(map[string]string)
+		if attrs, ok := jsonBody["Attributes"].(map[string]interface{}); ok {
+			for k, v := range attrs {
+				if strVal, ok := v.(string); ok {
+					attributes[k] = strVal
+				}
+			}
+		}
+	} else {
+		// Form-encoded request
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		queueName = r.FormValue("QueueName")
+		attributes = parseAttributes(r.Form, "Attribute")
+	}
+
 	if queueName == "" {
 		sendError(w, "MissingParameter", "QueueName is required", http.StatusBadRequest)
 		return
 	}
 
-	attributes := parseAttributes(r.Form, "Attribute")
 	queue, err := queueManager.CreateQueue(queueName, attributes)
 	if err != nil {
 		sendError(w, "InternalError", err.Error(), http.StatusInternalServerError)
@@ -82,7 +175,28 @@ func handleCreateQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDeleteQueue(w http.ResponseWriter, r *http.Request) {
-	queueURL := r.FormValue("QueueUrl")
+	var queueURL string
+
+	// Check if this is a JSON request
+	if r.Header.Get("X-Amz-Target") != "" {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+		
+		if url, ok := jsonBody["QueueUrl"].(string); ok {
+			queueURL = url
+		}
+	} else {
+		// Form-encoded request
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		queueURL = r.FormValue("QueueUrl")
+	}
+
 	queueName := extractQueueName(queueURL)
 
 	if queueManager.DeleteQueue(queueName) {
@@ -96,7 +210,28 @@ func handleDeleteQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleListQueues(w http.ResponseWriter, r *http.Request) {
-	prefix := r.FormValue("QueueNamePrefix")
+	var prefix string
+
+	// Check if this is a JSON request
+	if r.Header.Get("X-Amz-Target") != "" {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+		
+		if p, ok := jsonBody["QueueNamePrefix"].(string); ok {
+			prefix = p
+		}
+	} else {
+		// Form-encoded request
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		prefix = r.FormValue("QueueNamePrefix")
+	}
+
 	urls := queueManager.ListQueues(prefix)
 
 	type ListQueuesResponse struct {
@@ -115,10 +250,45 @@ func handleListQueues(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleSendMessage(w http.ResponseWriter, r *http.Request) {
-	queueURL := r.FormValue("QueueUrl")
+	var queueURL, body string
+	var delaySeconds int
+	var attributes map[string]interface{}
+
+	// Check if this is a JSON request
+	if r.Header.Get("X-Amz-Target") != "" {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+
+		if url, ok := jsonBody["QueueUrl"].(string); ok {
+			queueURL = url
+		}
+		if msgBody, ok := jsonBody["MessageBody"].(string); ok {
+			body = msgBody
+		}
+		if delay, ok := jsonBody["DelaySeconds"].(float64); ok {
+			delaySeconds = int(delay)
+		}
+		if attrs, ok := jsonBody["MessageAttributes"].(map[string]interface{}); ok {
+			attributes = attrs
+		} else {
+			attributes = make(map[string]interface{})
+		}
+	} else {
+		// Form-encoded request
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		queueURL = r.FormValue("QueueUrl")
+		body = r.FormValue("MessageBody")
+		delaySeconds = parseIntDefault(r.FormValue("DelaySeconds"), 0)
+		attributes = parseMessageAttributes(r.Form)
+	}
+
 	queueName := extractQueueName(queueURL)
-	body := r.FormValue("MessageBody")
-	delaySeconds := parseIntDefault(r.FormValue("DelaySeconds"), 0)
 
 	queue, exists := queueManager.GetQueue(queueName)
 	if !exists {
@@ -126,7 +296,6 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attributes := parseMessageAttributes(r.Form)
 	msg := queue.SendMessage(body, attributes, delaySeconds)
 
 	type SendMessageResponse struct {
@@ -145,10 +314,42 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
-	queueURL := r.FormValue("QueueUrl")
+	var queueURL string
+	var maxMessages, visibilityTimeout int
+
+	// Check if this is a JSON request
+	if r.Header.Get("X-Amz-Target") != "" {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+
+		if url, ok := jsonBody["QueueUrl"].(string); ok {
+			queueURL = url
+		}
+		if max, ok := jsonBody["MaxNumberOfMessages"].(float64); ok {
+			maxMessages = int(max)
+		} else {
+			maxMessages = 1
+		}
+		if vis, ok := jsonBody["VisibilityTimeout"].(float64); ok {
+			visibilityTimeout = int(vis)
+		} else {
+			visibilityTimeout = 30
+		}
+	} else {
+		// Form-encoded request
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		queueURL = r.FormValue("QueueUrl")
+		maxMessages = parseIntDefault(r.FormValue("MaxNumberOfMessages"), 1)
+		visibilityTimeout = parseIntDefault(r.FormValue("VisibilityTimeout"), 30)
+	}
+
 	queueName := extractQueueName(queueURL)
-	maxMessages := parseIntDefault(r.FormValue("MaxNumberOfMessages"), 1)
-	visibilityTimeout := parseIntDefault(r.FormValue("VisibilityTimeout"), 30)
 	waitTimeSeconds := parseIntDefault(r.FormValue("WaitTimeSeconds"), 0)
 
 	queue, exists := queueManager.GetQueue(queueName)
@@ -185,9 +386,33 @@ func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
-	queueURL := r.FormValue("QueueUrl")
+	var queueURL, receiptHandle string
+
+	// Check if this is a JSON request
+	if r.Header.Get("X-Amz-Target") != "" {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+
+		if url, ok := jsonBody["QueueUrl"].(string); ok {
+			queueURL = url
+		}
+		if receipt, ok := jsonBody["ReceiptHandle"].(string); ok {
+			receiptHandle = receipt
+		}
+	} else {
+		// Form-encoded request
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		queueURL = r.FormValue("QueueUrl")
+		receiptHandle = r.FormValue("ReceiptHandle")
+	}
+
 	queueName := extractQueueName(queueURL)
-	receiptHandle := r.FormValue("ReceiptHandle")
 
 	queue, exists := queueManager.GetQueue(queueName)
 	if !exists {
@@ -206,7 +431,28 @@ func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetQueueAttributes(w http.ResponseWriter, r *http.Request) {
-	queueURL := r.FormValue("QueueUrl")
+	var queueURL string
+
+	// Check if this is a JSON request
+	if r.Header.Get("X-Amz-Target") != "" {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+		
+		if url, ok := jsonBody["QueueUrl"].(string); ok {
+			queueURL = url
+		}
+	} else {
+		// Form-encoded request
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		queueURL = r.FormValue("QueueUrl")
+	}
+
 	queueName := extractQueueName(queueURL)
 
 	queue, exists := queueManager.GetQueue(queueName)
@@ -241,7 +487,28 @@ func handleGetQueueAttributes(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlePurgeQueue(w http.ResponseWriter, r *http.Request) {
-	queueURL := r.FormValue("QueueUrl")
+	var queueURL string
+
+	// Check if this is a JSON request
+	if r.Header.Get("X-Amz-Target") != "" {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+		
+		if url, ok := jsonBody["QueueUrl"].(string); ok {
+			queueURL = url
+		}
+	} else {
+		// Form-encoded request
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		queueURL = r.FormValue("QueueUrl")
+	}
+
 	queueName := extractQueueName(queueURL)
 
 	queue, exists := queueManager.GetQueue(queueName)
