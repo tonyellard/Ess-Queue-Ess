@@ -8,6 +8,7 @@ RUN go mod download
 
 # Copy source code
 COPY *.go ./
+COPY admin.html ./
 
 # Copy license files to builder stage
 COPY LICENSE NOTICE ./
