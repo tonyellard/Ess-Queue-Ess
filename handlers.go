@@ -724,22 +724,29 @@ func adminUIHandler(w http.ResponseWriter, r *http.Request) {
 
 // Admin API: Queue details
 type QueueDetails struct {
-	Name            string           `json:"name"`
-	URL             string           `json:"url"`
-	MessageCount    int              `json:"message_count"`
-	VisibleCount    int              `json:"visible_count"`
-	NotVisibleCount int              `json:"not_visible_count"`
-	DelayedCount    int              `json:"delayed_count"`
-	Messages        []MessageDetails `json:"messages"`
+	Name                      string              `json:"name"`
+	URL                       string              `json:"url"`
+	MessageCount              int                 `json:"message_count"`
+	VisibleCount              int                 `json:"visible_count"`
+	NotVisibleCount           int                 `json:"not_visible_count"`
+	DelayedCount              int                 `json:"delayed_count"`
+	Messages                  []MessageDetails    `json:"messages"`
+	FifoQueue                 bool                `json:"fifo_queue"`
+	ContentBasedDeduplication bool                `json:"content_based_deduplication,omitempty"`
+	RedrivePolicy             *RedrivePolicy      `json:"redrive_policy,omitempty"`
+	RedriveAllowPolicy        *RedriveAllowPolicy `json:"redrive_allow_policy,omitempty"`
 }
 
 type MessageDetails struct {
-	MessageID     string    `json:"message_id"`
-	Body          string    `json:"body"`
-	MD5OfBody     string    `json:"md5_of_body"`
-	SentTimestamp time.Time `json:"sent_timestamp"`
-	ReceiveCount  int       `json:"receive_count"`
-	ReceiptHandle string    `json:"receipt_handle,omitempty"`
+	MessageID              string    `json:"message_id"`
+	Body                   string    `json:"body"`
+	MD5OfBody              string    `json:"md5_of_body"`
+	SentTimestamp          time.Time `json:"sent_timestamp"`
+	ReceiveCount           int       `json:"receive_count"`
+	ReceiptHandle          string    `json:"receipt_handle,omitempty"`
+	SequenceNumber         string    `json:"sequence_number,omitempty"`
+	MessageGroupId         string    `json:"message_group_id,omitempty"`
+	MessageDeduplicationId string    `json:"message_deduplication_id,omitempty"`
 }
 
 func adminAPIHandler(w http.ResponseWriter, r *http.Request) {
@@ -765,23 +772,30 @@ func adminAPIHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			messages = append(messages, MessageDetails{
-				MessageID:     msg.MessageID,
-				Body:          msg.Body,
-				MD5OfBody:     msg.MD5OfBody,
-				SentTimestamp: msg.SentTimestamp,
-				ReceiveCount:  msg.ReceiveCount,
-				ReceiptHandle: msg.ReceiptHandle,
+				MessageID:              msg.MessageID,
+				Body:                   msg.Body,
+				MD5OfBody:              msg.MD5OfBody,
+				SentTimestamp:          msg.SentTimestamp,
+				ReceiveCount:           msg.ReceiveCount,
+				ReceiptHandle:          msg.ReceiptHandle,
+				SequenceNumber:         msg.SequenceNumber,
+				MessageGroupId:         msg.MessageGroupId,
+				MessageDeduplicationId: msg.MessageDeduplicationId,
 			})
 		}
 
 		queueDetails = append(queueDetails, QueueDetails{
-			Name:            queue.Name,
-			URL:             queue.URL,
-			MessageCount:    len(queue.Messages),
-			VisibleCount:    visibleCount,
-			NotVisibleCount: notVisibleCount,
-			DelayedCount:    delayedCount,
-			Messages:        messages,
+			Name:                      queue.Name,
+			URL:                       queue.URL,
+			MessageCount:              len(queue.Messages),
+			VisibleCount:              visibleCount,
+			NotVisibleCount:           notVisibleCount,
+			DelayedCount:              delayedCount,
+			Messages:                  messages,
+			FifoQueue:                 queue.FifoQueue,
+			ContentBasedDeduplication: queue.ContentBasedDeduplication,
+			RedrivePolicy:             queue.RedrivePolicy,
+			RedriveAllowPolicy:        queue.RedriveAllowPolicy,
 		})
 
 		queue.mu.RUnlock()
@@ -801,10 +815,11 @@ func adminCreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name                   string `json:"name"`
-		VisibilityTimeout      int    `json:"visibility_timeout"`
-		MessageRetentionPeriod int    `json:"message_retention_period"`
-		MaxMessageSize         int    `json:"max_message_size"`
+		Name                   string            `json:"name"`
+		VisibilityTimeout      int               `json:"visibility_timeout"`
+		MessageRetentionPeriod int               `json:"message_retention_period"`
+		MaxMessageSize         int               `json:"max_message_size"`
+		Attributes             map[string]string `json:"attributes"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -833,6 +848,11 @@ func adminCreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	attributes["VisibilityTimeout"] = strconv.Itoa(req.VisibilityTimeout)
 	attributes["MessageRetentionPeriod"] = strconv.Itoa(req.MessageRetentionPeriod)
 	attributes["MaximumMessageSize"] = strconv.Itoa(req.MaxMessageSize)
+
+	// Merge in any additional attributes from the request (FIFO, RedrivePolicy, etc.)
+	for k, v := range req.Attributes {
+		attributes[k] = v
+	}
 
 	queue, err := queueManager.CreateQueue(req.Name, attributes)
 	if err != nil {
@@ -890,10 +910,12 @@ func adminSendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		QueueName    string            `json:"queue_name"`
-		MessageBody  string            `json:"message_body"`
-		DelaySeconds int               `json:"delay_seconds"`
-		Attributes   map[string]string `json:"attributes"`
+		QueueName              string            `json:"queue_name"`
+		MessageBody            string            `json:"message_body"`
+		DelaySeconds           int               `json:"delay_seconds"`
+		Attributes             map[string]string `json:"attributes"`
+		MessageGroupId         string            `json:"message_group_id"`
+		MessageDeduplicationId string            `json:"message_deduplication_id"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -918,13 +940,14 @@ func adminSendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		attrs[k] = v
 	}
 
-	message := queue.SendMessage(req.MessageBody, attrs, req.DelaySeconds, "", "")
+	message := queue.SendMessage(req.MessageBody, attrs, req.DelaySeconds, req.MessageDeduplicationId, req.MessageGroupId)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":    true,
-		"message_id": message.MessageID,
-		"queue_name": req.QueueName,
+		"success":         true,
+		"message_id":      message.MessageID,
+		"sequence_number": message.SequenceNumber,
+		"queue_name":      req.QueueName,
 	})
 }
 

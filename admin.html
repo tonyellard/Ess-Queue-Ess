@@ -111,6 +111,30 @@
             font-size: 1.1rem;
             font-weight: 600;
             color: #232f3e;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .queue-badge {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-radius: 3px;
+            letter-spacing: 0.5px;
+        }
+        .badge-fifo {
+            background: #4CAF50;
+            color: white;
+        }
+        .badge-dlq {
+            background: #f44336;
+            color: white;
+        }
+        .badge-has-dlq {
+            background: #2196F3;
+            color: white;
         }
         .queue-stats {
             display: flex;
@@ -373,9 +397,25 @@
             <form id="createQueueForm" onsubmit="createQueue(event)">
                 <div class="form-group">
                     <label for="queueName">Queue Name *</label>
-                    <input type="text" id="queueName" required pattern="[a-zA-Z0-9_-]+" 
+                    <input type="text" id="queueName" required pattern="[a-zA-Z0-9_.-]+" 
                            placeholder="my-queue" maxlength="80">
-                    <small>Alphanumeric characters, hyphens, and underscores only</small>
+                    <small>Alphanumeric characters, hyphens, underscores, and periods. Add .fifo suffix for FIFO queues</small>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="isFifoQueue" onchange="toggleFifoOptions()">
+                        FIFO Queue (.fifo will be added to name)
+                    </label>
+                    <small>First-In-First-Out queue with exactly-once processing</small>
+                </div>
+                <div id="fifoOptions" style="display: none; padding-left: 1.5rem;">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="contentBasedDeduplication">
+                            Content-Based Deduplication
+                        </label>
+                        <small>Automatically deduplicate messages based on body content</small>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label for="visibilityTimeout">Visibility Timeout (seconds)</label>
@@ -391,6 +431,20 @@
                     <label for="maxMessageSize">Maximum Message Size (bytes)</label>
                     <input type="number" id="maxMessageSize" value="262144" min="1024" max="262144">
                     <small>Default: 262144 bytes (256 KB)</small>
+                </div>
+                <div class="form-group">
+                    <label for="dlqTarget">Dead Letter Queue (Optional)</label>
+                    <select id="dlqTarget">
+                        <option value="">-- No DLQ --</option>
+                    </select>
+                    <small>Queue to send messages after max receive count</small>
+                </div>
+                <div id="dlqOptions" style="display: none;">
+                    <div class="form-group">
+                        <label for="maxReceiveCount">Max Receive Count</label>
+                        <input type="number" id="maxReceiveCount" value="3" min="1" max="1000">
+                        <small>Number of receives before moving to DLQ</small>
+                    </div>
                 </div>
                 <div class="btn-group">
                     <button type="submit" class="btn">Create Queue</button>
@@ -409,9 +463,22 @@
             </div>
             <form id="sendMessageForm" onsubmit="sendMessage(event)">
                 <input type="hidden" id="targetQueueName">
+                <input type="hidden" id="targetQueueIsFifo">
                 <div class="form-group">
                     <label for="messageBody">Message Body *</label>
                     <textarea id="messageBody" required placeholder="Enter your message body here..."></textarea>
+                </div>
+                <div id="fifoMessageFields" style="display: none;">
+                    <div class="form-group">
+                        <label for="messageGroupId">Message Group ID *</label>
+                        <input type="text" id="messageGroupId" placeholder="group-1">
+                        <small>Required for FIFO queues - messages in same group are ordered</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="messageDeduplicationId">Deduplication ID (Optional)</label>
+                        <input type="text" id="messageDeduplicationId" placeholder="unique-id-123">
+                        <small>Leave empty for content-based deduplication</small>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label for="delaySeconds">Delay (seconds)</label>
@@ -518,15 +585,27 @@
                             <div class="message-meta">
                                 <span>Receive Count: ${msg.receive_count}</span>
                                 <span>MD5: ${msg.md5_of_body.substring(0, 8)}...</span>
+                                ${msg.sequence_number ? `<span>Seq: ${msg.sequence_number}</span>` : ''}
+                                ${msg.message_group_id ? `<span>Group: ${msg.message_group_id}</span>` : ''}
+                                ${msg.message_deduplication_id ? `<span>Dedup ID: ${msg.message_deduplication_id.substring(0, 8)}...</span>` : ''}
                             </div>
                         </div>
                     `).join('')
                     : '<div class="no-messages">No messages in this queue</div>';
 
+                const isFifo = queue.name.endsWith('.fifo');
+                const hasDlq = queue.redrive_policy && queue.redrive_policy.deadLetterTargetArn;
+                const isDlq = queuesData.some(q => q.redrive_policy && q.redrive_policy.deadLetterTargetArn && q.redrive_policy.deadLetterTargetArn.includes(queue.name));
+                
                 return `
                     <li class="queue-item">
                         <div class="queue-header" onclick="toggleMessages(${index})">
-                            <span class="queue-name">${queue.name}</span>
+                            <span class="queue-name">
+                                ${queue.name}
+                                ${isFifo ? '<span class="queue-badge badge-fifo">FIFO</span>' : ''}
+                                ${isDlq ? '<span class="queue-badge badge-dlq">DLQ</span>' : ''}
+                                ${hasDlq ? '<span class="queue-badge badge-has-dlq">→ DLQ</span>' : ''}
+                            </span>
                             <div style="display: flex; align-items: center; gap: 2rem;">
                                 <div class="queue-stats">
                                     <div class="queue-stat">
@@ -543,7 +622,8 @@
                                     </div>
                                 </div>
                                 <div class="queue-actions" onclick="event.stopPropagation()">
-                                    <button class="btn btn-small" onclick="showSendMessageModal('${queue.name}')">📤 Send</button>
+                                    <button class="btn btn-small" onclick="showSendMessageModal('${queue.name}', ${isFifo})">📤 Send</button>
+                                    ${isDlq ? `<button class="btn btn-small" onclick="redriveMessages('${queue.name}')">↩️ Redrive</button>` : ''}
                                     <button class="btn btn-danger btn-small" onclick="showDeleteQueueModal('${queue.name}')">🗑 Delete</button>
                                 </div>
                                 <span class="expand-icon" id="icon-${index}">▼</span>
@@ -585,12 +665,39 @@
 
         function showCreateQueueModal() {
             document.getElementById('createQueueForm').reset();
+            document.getElementById('fifoOptions').style.display = 'none';
+            document.getElementById('dlqOptions').style.display = 'none';
+            
+            // Populate DLQ dropdown with existing queues
+            const dlqSelect = document.getElementById('dlqTarget');
+            dlqSelect.innerHTML = '<option value="">-- No DLQ --</option>';
+            queuesData.forEach(queue => {
+                dlqSelect.innerHTML += `<option value="${queue.name}">${queue.name}</option>`;
+            });
+            
+            // Add onchange handler for DLQ dropdown
+            dlqSelect.onchange = function() {
+                document.getElementById('dlqOptions').style.display = this.value ? 'block' : 'none';
+            };
+            
             showModal('createQueueModal');
         }
 
-        function showSendMessageModal(queueName) {
+        function showSendMessageModal(queueName, isFifo) {
             document.getElementById('sendMessageForm').reset();
             document.getElementById('targetQueueName').value = queueName;
+            document.getElementById('targetQueueIsFifo').value = isFifo ? 'true' : 'false';
+            
+            // Show/hide FIFO fields
+            const fifoFields = document.getElementById('fifoMessageFields');
+            if (isFifo) {
+                fifoFields.style.display = 'block';
+                document.getElementById('messageGroupId').required = true;
+            } else {
+                fifoFields.style.display = 'none';
+                document.getElementById('messageGroupId').required = false;
+            }
+            
             showModal('sendMessageModal');
         }
 
@@ -600,16 +707,56 @@
             showModal('deleteQueueModal');
         }
 
+        function toggleFifoOptions() {
+            const isFifo = document.getElementById('isFifoQueue').checked;
+            document.getElementById('fifoOptions').style.display = isFifo ? 'block' : 'none';
+            
+            // Update queue name pattern
+            const queueNameInput = document.getElementById('queueName');
+            if (isFifo && !queueNameInput.value.endsWith('.fifo')) {
+                queueNameInput.value = queueNameInput.value.replace(/\.fifo$/, '') + '.fifo';
+            } else if (!isFifo) {
+                queueNameInput.value = queueNameInput.value.replace(/\.fifo$/, '');
+            }
+        }
+
         // API functions
         async function createQueue(event) {
             event.preventDefault();
             
+            let queueName = document.getElementById('queueName').value;
+            const isFifo = document.getElementById('isFifoQueue').checked;
+            
+            // Ensure .fifo suffix for FIFO queues
+            if (isFifo && !queueName.endsWith('.fifo')) {
+                queueName += '.fifo';
+            }
+            
             const queueData = {
-                name: document.getElementById('queueName').value,
+                name: queueName,
                 visibility_timeout: parseInt(document.getElementById('visibilityTimeout').value),
                 message_retention_period: parseInt(document.getElementById('messageRetention').value),
-                max_message_size: parseInt(document.getElementById('maxMessageSize').value)
+                max_message_size: parseInt(document.getElementById('maxMessageSize').value),
+                attributes: {}
             };
+
+            // Add FIFO attributes
+            if (isFifo) {
+                queueData.attributes.FifoQueue = 'true';
+                if (document.getElementById('contentBasedDeduplication').checked) {
+                    queueData.attributes.ContentBasedDeduplication = 'true';
+                }
+            }
+
+            // Add DLQ configuration
+            const dlqTarget = document.getElementById('dlqTarget').value;
+            if (dlqTarget) {
+                const maxReceiveCount = parseInt(document.getElementById('maxReceiveCount').value);
+                queueData.attributes.RedrivePolicy = JSON.stringify({
+                    deadLetterTargetArn: `arn:aws:sqs:us-east-1:000000000000:${dlqTarget}`,
+                    maxReceiveCount: maxReceiveCount
+                });
+            }
 
             try {
                 const response = await fetch('/admin/api/queue', {
@@ -659,12 +806,23 @@
         async function sendMessage(event) {
             event.preventDefault();
             
+            const isFifo = document.getElementById('targetQueueIsFifo').value === 'true';
+            
             const messageData = {
                 queue_name: document.getElementById('targetQueueName').value,
                 message_body: document.getElementById('messageBody').value,
                 delay_seconds: parseInt(document.getElementById('delaySeconds').value),
                 attributes: {}
             };
+
+            // Add FIFO-specific fields
+            if (isFifo) {
+                messageData.message_group_id = document.getElementById('messageGroupId').value;
+                const dedupId = document.getElementById('messageDeduplicationId').value;
+                if (dedupId) {
+                    messageData.message_deduplication_id = dedupId;
+                }
+            }
 
             try {
                 const response = await fetch('/admin/api/message', {
@@ -679,7 +837,11 @@
                     const result = await response.json();
                     closeModal('sendMessageModal');
                     await loadQueues();
-                    alert(`Message sent successfully!\nMessage ID: ${result.message_id}`);
+                    let msg = `Message sent successfully!\nMessage ID: ${result.message_id}`;
+                    if (result.sequence_number) {
+                        msg += `\nSequence Number: ${result.sequence_number}`;
+                    }
+                    alert(msg);
                 } else {
                     const error = await response.text();
                     alert(`Failed to send message: ${error}`);
@@ -687,6 +849,53 @@
             } catch (error) {
                 console.error('Error sending message:', error);
                 alert('Failed to send message. Please try again.');
+            }
+        }
+
+        async function redriveMessages(dlqName) {
+            if (!confirm(`Redrive messages from ${dlqName} back to source queue?`)) {
+                return;
+            }
+
+            try {
+                // Find the source queue for this DLQ
+                const sourceQueue = queuesData.find(q => 
+                    q.redrive_policy && 
+                    q.redrive_policy.deadLetterTargetArn && 
+                    q.redrive_policy.deadLetterTargetArn.includes(dlqName)
+                );
+
+                if (!sourceQueue) {
+                    alert('Could not find source queue for this DLQ');
+                    return;
+                }
+
+                const dlqArn = `arn:aws:sqs:us-east-1:000000000000:${dlqName}`;
+                const sourceArn = `arn:aws:sqs:us-east-1:000000000000:${sourceQueue.name}`;
+
+                // Use AWS SQS API to start message move task
+                const response = await fetch('/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-amz-json-1.0',
+                        'X-Amz-Target': 'AmazonSQS.StartMessageMoveTask'
+                    },
+                    body: JSON.stringify({
+                        SourceArn: dlqArn,
+                        DestinationArn: sourceArn
+                    })
+                });
+
+                if (response.ok) {
+                    await loadQueues();
+                    alert(`Messages redriven from ${dlqName} to ${sourceQueue.name}`);
+                } else {
+                    const error = await response.text();
+                    alert(`Failed to redrive messages: ${error}`);
+                }
+            } catch (error) {
+                console.error('Error redriving messages:', error);
+                alert('Failed to redrive messages. Please try again.');
             }
         }
 
