@@ -47,6 +47,37 @@ Get Ess-Queue-Ess running in under 5 minutes.
 
 7. **View in Admin UI**: Refresh the admin page to see your new queue and message!
 
+## Using the Admin UI for Queue Management
+
+The admin UI at `http://localhost:9324/admin` provides a visual way to manage queues:
+
+### Create a Queue
+1. Click "**+ Create Queue**" button
+2. Fill in queue settings:
+   - Queue Name (required)
+   - Visibility Timeout (default: 30 seconds)
+   - Message Retention Period (default: 4 days)
+   - Maximum Message Size (default: 256 KB)
+3. Click "**Create Queue**"
+
+### Send Test Messages
+1. Find the queue in the list
+2. Click "**📤 Send**" button
+3. Enter your message body and optional delay
+4. Click "**Send Message**"
+
+### Delete a Queue
+1. Find the queue in the list
+2. Click "**🗑 Delete**" button
+3. Confirm deletion
+
+### Export Configuration
+1. Click "**⬇ Export Config**" button
+2. Download `config.yaml` with your current queue setup
+3. Use this file to bootstrap queues on next startup
+
+This workflow lets you set up queues visually, then export the configuration for consistent deployments!
+
 ## Quick Start with Go
 
 1. **Clone, build, and run**:

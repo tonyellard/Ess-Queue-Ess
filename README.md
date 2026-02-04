@@ -118,18 +118,34 @@ aws sqs delete-queue --queue-url http://localhost:9324/test-queue
 
 ## Admin Web Interface
 
-Access the web-based admin UI to inspect queues and messages:
+Access the web-based admin UI to inspect and manage queues:
 
 ```
 http://localhost:9324/admin
 ```
 
 The admin interface provides:
-- Real-time queue statistics (total, visible, in-flight, delayed messages)
-- List of all queues with message counts
-- Expandable view to inspect message contents
-- Auto-refresh every 5 seconds
-- Click any queue to view its messages
+- **Real-time queue statistics** (total, visible, in-flight, delayed messages)
+- **Queue management**:
+  - Create new queues with custom settings (visibility timeout, retention, message size)
+  - Delete queues with confirmation dialog
+  - Send test messages to any queue
+  - Export current queue configuration as YAML
+- **Queue inspection**:
+  - List of all queues with message counts
+  - Expandable view to inspect message contents
+  - Auto-refresh every 5 seconds
+  - Click any queue to view its messages
+
+### Admin API Endpoints
+
+The admin UI uses the following REST API endpoints (also available for programmatic access):
+
+- `GET /admin/api/queues` - List all queues with messages
+- `POST /admin/api/queue` - Create a new queue
+- `DELETE /admin/api/queue?name={name}` - Delete a queue
+- `POST /admin/api/message` - Send a test message to a queue
+- `GET /admin/api/config/export` - Download current queue configuration as YAML
 
 ## Configuration
 
