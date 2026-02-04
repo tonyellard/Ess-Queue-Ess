@@ -9,11 +9,17 @@ Ess-Queue-Ess provides a local AWS Simple Queue Service (SQS) emulator that impl
 ## Features
 
 - **Core SQS Operations**: CreateQueue, DeleteQueue, ListQueues, SendMessage, ReceiveMessage, DeleteMessage
+- **FIFO Queues**: First-In-First-Out queues with exactly-once processing and message ordering
+- **Dead Letter Queues (DLQ)**: Automatic message movement to DLQ after max receive count
+- **Message Redrive**: Move messages from DLQ back to source queue via StartMessageMoveTask API
+- **Message Deduplication**: Content-based and explicit deduplication for FIFO queues
+- **Message Groups**: Ordered message processing within groups for FIFO queues
 - **Queue Attributes**: Get and monitor queue statistics (message counts, visibility settings)
 - **Message Management**: Visibility timeout, message retention, delay delivery
 - **Web Admin UI**: Browser-based interface to inspect queues and messages in real-time
 - **Configuration Bootstrap**: Define queues in YAML config to auto-create on startup
-- **SQS API Compatible**: Works with AWS SDKs by pointing endpoint to localhost
+- **Multi-SDK Support**: Compatible with AWS CLI, Python boto3, .NET AWS SDK, and other AWS SDKs
+- **Dual Protocol Support**: Handles both JSON (AWS CLI v2) and Query (XML) protocols
 - **Docker Support**: Run as a containerized service with docker-compose
 - **Zero Configuration**: Works out of the box with sensible defaults
 - **Lightweight**: Minimal dependencies, fast startup
@@ -23,18 +29,22 @@ Ess-Queue-Ess provides a local AWS Simple Queue Service (SQS) emulator that impl
 This emulator is designed for local development and testing. It intentionally does not implement:
 
 - **No Persistence**: Messages are stored in-memory only; they are lost on restart
-- **No FIFO Queues**: Only standard queues are supported
-- **No Dead Letter Queues**: DLQ functionality not implemented
-- **No Message Deduplication**: Deduplication IDs are not supported
 - **No IAM/Authentication**: All requests are accepted without authentication
 - **No Encryption**: Server-side encryption (SSE) not supported
+- **Simplified Deduplication Window**: Fixed 5-minute window (configurable in real AWS SQS)
 - **Simplified Message Attributes**: Basic support only
-
-These limitations keep the emulator simple and fast for development purposes.
+- **No Batch Operations**: SendMessageBatch and DeleteMessageBatch not yet implemented
+- **Immediate Redrive**: Message move tasks complete immediately (no async processing)
 
 ## QUICKSTART
 
 See [QUICKSTART.md](QUICKSTART.md) for a quick getting started guide.
+
+## Documentation
+
+- **[FIFO Queues and Dead Letter Queues](docs/FIFO_AND_DLQ.md)** - Complete guide to FIFO queues, DLQ, and message redrive
+- **[Configuration Bootstrap](docs/CONFIGURATION.md)** - Auto-create queues from YAML config (if exists)
+- **[Admin UI Guide](docs/ADMIN_UI.md)** - Web interface documentation (if exists)
 
 ## Installation
 

@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 //go:embed admin.html
@@ -65,6 +67,12 @@ func sqsHandler(w http.ResponseWriter, r *http.Request) {
 		handleGetQueueAttributes(w, r)
 	case "PurgeQueue":
 		handlePurgeQueue(w, r)
+	case "StartMessageMoveTask":
+		handleStartMessageMoveTask(w, r)
+	case "ListMessageMoveTasks":
+		handleListMessageMoveTasks(w, r)
+	case "CancelMessageMoveTask":
+		handleCancelMessageMoveTask(w, r)
 	default:
 		sendError(w, "InvalidAction", "Unknown action: "+action, http.StatusBadRequest)
 	}
@@ -272,6 +280,7 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	var queueURL, body string
 	var delaySeconds int
 	var attributes map[string]interface{}
+	var deduplicationId, groupId string
 
 	// Check if this is a JSON request
 	if r.Header.Get("X-Amz-Target") != "" {
@@ -295,6 +304,13 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		} else {
 			attributes = make(map[string]interface{})
 		}
+		// FIFO-specific parameters
+		if dedupId, ok := jsonBody["MessageDeduplicationId"].(string); ok {
+			deduplicationId = dedupId
+		}
+		if msgGroupId, ok := jsonBody["MessageGroupId"].(string); ok {
+			groupId = msgGroupId
+		}
 	} else {
 		// Form-encoded request
 		if err := r.ParseForm(); err != nil {
@@ -305,6 +321,8 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		body = r.FormValue("MessageBody")
 		delaySeconds = parseIntDefault(r.FormValue("DelaySeconds"), 0)
 		attributes = parseMessageAttributes(r.Form)
+		deduplicationId = r.FormValue("MessageDeduplicationId")
+		groupId = r.FormValue("MessageGroupId")
 	}
 
 	queueName := extractQueueName(queueURL)
@@ -315,28 +333,34 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := queue.SendMessage(body, attributes, delaySeconds)
+	msg := queue.SendMessage(body, attributes, delaySeconds, deduplicationId, groupId)
 
 	type SendMessageResponse struct {
 		XMLName xml.Name `xml:"SendMessageResponse" json:"-"`
 		Result  struct {
 			MD5OfMessageBody string `xml:"MD5OfMessageBody" json:"MD5OfMessageBody"`
 			MessageId        string `xml:"MessageId" json:"MessageId"`
+			SequenceNumber   string `xml:"SequenceNumber,omitempty" json:"SequenceNumber,omitempty"`
 		} `xml:"SendMessageResult" json:"-"`
 	}
 
 	type SendMessageJSONResponse struct {
 		MD5OfMessageBody string `json:"MD5OfMessageBody"`
 		MessageId        string `json:"MessageId"`
+		SequenceNumber   string `json:"SequenceNumber,omitempty"`
 	}
 
 	resp := SendMessageResponse{}
 	resp.Result.MD5OfMessageBody = msg.MD5OfBody
 	resp.Result.MessageId = msg.MessageID
+	if msg.SequenceNumber != "" {
+		resp.Result.SequenceNumber = msg.SequenceNumber
+	}
 
 	jsonResp := SendMessageJSONResponse{
 		MD5OfMessageBody: msg.MD5OfBody,
 		MessageId:        msg.MessageID,
+		SequenceNumber:   msg.SequenceNumber,
 	}
 
 	sendResponse(w, r, resp, jsonResp)
@@ -894,7 +918,7 @@ func adminSendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		attrs[k] = v
 	}
 
-	message := queue.SendMessage(req.MessageBody, attrs, req.DelaySeconds)
+	message := queue.SendMessage(req.MessageBody, attrs, req.DelaySeconds, "", "")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -933,4 +957,132 @@ func adminExportConfigHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-yaml")
 	w.Header().Set("Content-Disposition", "attachment; filename=config.yaml")
 	w.Write([]byte(configYAML.String()))
+}
+
+// Redrive handlers for DLQ support
+func handleStartMessageMoveTask(w http.ResponseWriter, r *http.Request) {
+	var sourceArn string
+	var destinationArn string
+	var maxMessages int
+
+	isJSON := r.Header.Get("X-Amz-Target") != ""
+
+	if isJSON {
+		jsonBody, err := parseRequestJSON(r)
+		if err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
+			return
+		}
+
+		if arn, ok := jsonBody["SourceArn"].(string); ok {
+			sourceArn = arn
+		}
+		if arn, ok := jsonBody["DestinationArn"].(string); ok {
+			destinationArn = arn
+		}
+		if max, ok := jsonBody["MaxNumberOfMessagesPerSecond"].(float64); ok {
+			maxMessages = int(max)
+		}
+	} else {
+		if err := r.ParseForm(); err != nil {
+			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			return
+		}
+		sourceArn = r.FormValue("SourceArn")
+		destinationArn = r.FormValue("DestinationArn")
+		maxMessages = parseIntDefault(r.FormValue("MaxNumberOfMessagesPerSecond"), 0)
+	}
+
+	// Extract queue names from ARNs
+	sourceName := extractQueueNameFromArn(sourceArn)
+
+	// If destinationArn is empty, use the source queue's redrive policy
+	var destName string
+	if destinationArn != "" {
+		destName = extractQueueNameFromArn(destinationArn)
+	} else {
+		// Get the source queue from DLQ and find which queue has this as their DLQ
+		_, exists := queueManager.GetQueue(sourceName)
+		if !exists {
+			sendError(w, "NonExistentQueue", "Source queue does not exist", http.StatusBadRequest)
+			return
+		}
+
+		// Find which queue has this as their DLQ
+		for _, q := range queueManager.GetAllQueues() {
+			if q.RedrivePolicy != nil && q.RedrivePolicy.DeadLetterTargetArn == sourceArn {
+				destName = q.Name
+				break
+			}
+		}
+	}
+
+	if maxMessages == 0 {
+		maxMessages = 100 // Default to moving 100 messages
+	}
+
+	movedCount := queueManager.RedriveMessages(sourceName, "arn:aws:sqs:us-east-1:000000000000:"+destName, maxMessages)
+
+	taskId := uuid.New().String()
+
+	if isJSON {
+		type StartMessageMoveTaskJSONResponse struct {
+			TaskHandle string `json:"TaskHandle"`
+		}
+		resp := StartMessageMoveTaskJSONResponse{
+			TaskHandle: taskId,
+		}
+		sendJSONResponse(w, resp)
+	} else {
+		type StartMessageMoveTaskResponse struct {
+			XMLName xml.Name `xml:"StartMessageMoveTaskResponse"`
+			Result  struct {
+				TaskHandle string `xml:"TaskHandle"`
+			} `xml:"StartMessageMoveTaskResult"`
+		}
+		resp := StartMessageMoveTaskResponse{}
+		resp.Result.TaskHandle = taskId
+		sendXMLResponse(w, resp)
+	}
+
+	log.Printf("Started message move task %s: moved %d messages from %s to %s", taskId, movedCount, sourceName, destName)
+}
+
+func handleListMessageMoveTasks(w http.ResponseWriter, r *http.Request) {
+	isJSON := r.Header.Get("X-Amz-Target") != ""
+
+	// For now, return empty list since we process moves immediately
+	if isJSON {
+		type ListMessageMoveTasksJSONResponse struct {
+			Results []interface{} `json:"Results"`
+		}
+		resp := ListMessageMoveTasksJSONResponse{
+			Results: make([]interface{}, 0),
+		}
+		sendJSONResponse(w, resp)
+	} else {
+		type ListMessageMoveTasksResponse struct {
+			XMLName xml.Name `xml:"ListMessageMoveTasksResponse"`
+			Result  struct {
+				Results []interface{} `xml:"Results"`
+			} `xml:"ListMessageMoveTasksResult"`
+		}
+		resp := ListMessageMoveTasksResponse{}
+		resp.Result.Results = make([]interface{}, 0)
+		sendXMLResponse(w, resp)
+	}
+}
+
+func handleCancelMessageMoveTask(w http.ResponseWriter, r *http.Request) {
+	isJSON := r.Header.Get("X-Amz-Target") != ""
+
+	// Since we process moves immediately, there's nothing to cancel
+	if isJSON {
+		sendJSONResponse(w, struct{}{})
+	} else {
+		type CancelMessageMoveTaskResponse struct {
+			XMLName xml.Name `xml:"CancelMessageMoveTaskResponse"`
+		}
+		sendXMLResponse(w, CancelMessageMoveTaskResponse{})
+	}
 }

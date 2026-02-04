@@ -22,6 +22,11 @@ type Message struct {
 	MessageAttributes      map[string]interface{} `json:"MessageAttributes,omitempty"`
 	MD5OfMessageAttributes string                 `json:"MD5OfMessageAttributes,omitempty"`
 
+	// FIFO-specific fields
+	MessageDeduplicationId string `json:"MessageDeduplicationId,omitempty"`
+	MessageGroupId         string `json:"MessageGroupId,omitempty"`
+	SequenceNumber         string `json:"SequenceNumber,omitempty"`
+
 	// Internal fields
 	SentTimestamp     time.Time
 	ReceiveCount      int
@@ -44,6 +49,28 @@ type Queue struct {
 	MaximumMessageSize     int // bytes
 	DelaySeconds           int
 	ReceiveMessageWaitTime int // seconds (long polling)
+
+	// FIFO configuration
+	FifoQueue                 bool
+	ContentBasedDeduplication bool
+	deduplicationCache        map[string]time.Time // deduplicationId -> timestamp
+	sequenceNumber            int64
+
+	// DLQ configuration
+	RedrivePolicy      *RedrivePolicy
+	RedriveAllowPolicy *RedriveAllowPolicy
+}
+
+// RedrivePolicy defines Dead Letter Queue configuration
+type RedrivePolicy struct {
+	DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+	MaxReceiveCount     int    `json:"maxReceiveCount"`
+}
+
+// RedriveAllowPolicy defines which queues can use this as a DLQ
+type RedriveAllowPolicy struct {
+	RedrivePermission string   `json:"redrivePermission"` // allowAll, denyAll, byQueue
+	SourceQueueArns   []string `json:"sourceQueueArns,omitempty"`
 }
 
 // QueueManager manages all queues
@@ -78,6 +105,28 @@ func (qm *QueueManager) CreateQueue(name string, attributes map[string]string) (
 		MaximumMessageSize:     262144, // default 256 KB
 		DelaySeconds:           0,
 		ReceiveMessageWaitTime: 0,
+		deduplicationCache:     make(map[string]time.Time),
+		sequenceNumber:         0,
+	}
+
+	// Check if this is a FIFO queue
+	if len(name) > 5 && name[len(name)-5:] == ".fifo" {
+		queue.FifoQueue = true
+	}
+
+	// Parse FIFO attributes
+	if contentBased, ok := attributes["ContentBasedDeduplication"]; ok && contentBased == "true" {
+		queue.ContentBasedDeduplication = true
+	}
+
+	// Parse RedrivePolicy
+	if redrivePolicyStr, ok := attributes["RedrivePolicy"]; ok {
+		queue.RedrivePolicy = parseRedrivePolicy(redrivePolicyStr)
+	}
+
+	// Parse RedriveAllowPolicy
+	if redriveAllowPolicyStr, ok := attributes["RedriveAllowPolicy"]; ok {
+		queue.RedriveAllowPolicy = parseRedriveAllowPolicy(redriveAllowPolicyStr)
 	}
 
 	qm.queues[name] = queue
@@ -130,18 +179,47 @@ func (qm *QueueManager) GetAllQueues() []*Queue {
 }
 
 // SendMessage adds a message to the queue
-func (q *Queue) SendMessage(body string, attributes map[string]interface{}, delaySeconds int) *Message {
+func (q *Queue) SendMessage(body string, attributes map[string]interface{}, delaySeconds int, deduplicationId, groupId string) *Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	// Handle FIFO deduplication
+	if q.FifoQueue {
+		// Determine deduplication ID
+		if deduplicationId == "" && q.ContentBasedDeduplication {
+			deduplicationId = calculateMD5(body)
+		}
+
+		// Check deduplication cache (5-minute window)
+		if deduplicationId != "" {
+			if lastSent, exists := q.deduplicationCache[deduplicationId]; exists {
+				if time.Since(lastSent) < 5*time.Minute {
+					// Find and return the existing message
+					for _, msg := range q.Messages {
+						if msg.MessageDeduplicationId == deduplicationId {
+							return msg
+						}
+					}
+				}
+			}
+			q.deduplicationCache[deduplicationId] = time.Now()
+		}
+	}
+
+	q.sequenceNumber++
+	sequenceNum := strconv.FormatInt(q.sequenceNumber, 10)
+
 	msg := &Message{
-		MessageID:         uuid.New().String(),
-		Body:              body,
-		MD5OfBody:         calculateMD5(body),
-		MessageAttributes: attributes,
-		SentTimestamp:     time.Now(),
-		ReceiveCount:      0,
-		DelayUntil:        time.Now().Add(time.Duration(delaySeconds) * time.Second),
+		MessageID:              uuid.New().String(),
+		Body:                   body,
+		MD5OfBody:              calculateMD5(body),
+		MessageAttributes:      attributes,
+		SentTimestamp:          time.Now(),
+		ReceiveCount:           0,
+		DelayUntil:             time.Now().Add(time.Duration(delaySeconds) * time.Second),
+		MessageDeduplicationId: deduplicationId,
+		MessageGroupId:         groupId,
+		SequenceNumber:         sequenceNum,
 	}
 
 	q.Messages = append(q.Messages, msg)
@@ -156,17 +234,43 @@ func (q *Queue) ReceiveMessages(maxMessages int, visibilityTimeout int, waitTime
 	now := time.Now()
 	available := make([]*Message, 0)
 
-	for _, msg := range q.Messages {
-		// Check if message is available (not delayed, not invisible)
-		if now.After(msg.DelayUntil) && now.After(msg.VisibilityTimeout) {
-			available = append(available, msg)
-			if len(available) >= maxMessages {
-				break
+	if q.FifoQueue {
+		// For FIFO queues, group messages by MessageGroupId and return in order
+		groupMap := make(map[string][]*Message)
+		for _, msg := range q.Messages {
+			if now.After(msg.DelayUntil) && now.After(msg.VisibilityTimeout) {
+				groupId := msg.MessageGroupId
+				if groupId == "" {
+					groupId = "default"
+				}
+				groupMap[groupId] = append(groupMap[groupId], msg)
+			}
+		}
+
+		// Return messages from each group in order, one message per group
+		for _, msgs := range groupMap {
+			if len(msgs) > 0 {
+				available = append(available, msgs[0])
+				if len(available) >= maxMessages {
+					break
+				}
+			}
+		}
+	} else {
+		// Standard queue: return messages in any order
+		for _, msg := range q.Messages {
+			if now.After(msg.DelayUntil) && now.After(msg.VisibilityTimeout) {
+				available = append(available, msg)
+				if len(available) >= maxMessages {
+					break
+				}
 			}
 		}
 	}
 
 	// Mark messages as invisible and set receipt handles
+	// Also check if message should be moved to DLQ
+	messagesToMove := make([]*Message, 0)
 	for _, msg := range available {
 		msg.ReceiptHandle = uuid.New().String()
 		msg.VisibilityTimeout = now.Add(time.Duration(visibilityTimeout) * time.Second)
@@ -174,6 +278,16 @@ func (q *Queue) ReceiveMessages(maxMessages int, visibilityTimeout int, waitTime
 		if msg.ReceiveCount == 1 {
 			msg.FirstReceivedTime = now
 		}
+
+		// Check if message should be moved to DLQ
+		if q.RedrivePolicy != nil && msg.ReceiveCount >= q.RedrivePolicy.MaxReceiveCount {
+			messagesToMove = append(messagesToMove, msg)
+		}
+	}
+
+	// Move messages to DLQ after iteration to avoid modifying slice during iteration
+	for _, msg := range messagesToMove {
+		q.moveToDLQ(msg)
 	}
 
 	return available
@@ -230,8 +344,200 @@ func (q *Queue) GetAttributes() map[string]string {
 	return attrs
 }
 
+// moveToDLQ moves a message to the dead letter queue
+func (q *Queue) moveToDLQ(msg *Message) {
+	if q.RedrivePolicy == nil {
+		return
+	}
+
+	// Extract DLQ name from ARN
+	dlqName := extractQueueNameFromArn(q.RedrivePolicy.DeadLetterTargetArn)
+
+	dlq, exists := queueManager.GetQueue(dlqName)
+	if !exists {
+		return
+	}
+
+	// Remove from current queue
+	for i, m := range q.Messages {
+		if m.MessageID == msg.MessageID {
+			q.Messages = append(q.Messages[:i], q.Messages[i+1:]...)
+			break
+		}
+	}
+
+	// Reset message state for DLQ
+	msg.ReceiptHandle = ""
+	msg.VisibilityTimeout = time.Time{}
+	msg.DelayUntil = time.Now()
+
+	// Add to DLQ
+	dlq.mu.Lock()
+	dlq.Messages = append(dlq.Messages, msg)
+	dlq.mu.Unlock()
+}
+
+// RedriveMessages moves messages from this DLQ back to the source queue
+func (qm *QueueManager) RedriveMessages(dlqName, sourceQueueArn string, maxMessages int) int {
+	dlq, exists := qm.GetQueue(dlqName)
+	if !exists {
+		return 0
+	}
+
+	sourceQueueName := extractQueueNameFromArn(sourceQueueArn)
+	sourceQueue, exists := qm.GetQueue(sourceQueueName)
+	if !exists {
+		return 0
+	}
+
+	dlq.mu.Lock()
+	defer dlq.mu.Unlock()
+
+	movedCount := 0
+	messagesToMove := make([]*Message, 0)
+
+	for i, msg := range dlq.Messages {
+		if maxMessages > 0 && movedCount >= maxMessages {
+			break
+		}
+		messagesToMove = append(messagesToMove, msg)
+		dlq.Messages = append(dlq.Messages[:i], dlq.Messages[i+1:]...)
+		movedCount++
+	}
+
+	// Move messages to source queue
+	sourceQueue.mu.Lock()
+	for _, msg := range messagesToMove {
+		msg.ReceiptHandle = ""
+		msg.VisibilityTimeout = time.Time{}
+		msg.ReceiveCount = 0
+		msg.DelayUntil = time.Now()
+		sourceQueue.Messages = append(sourceQueue.Messages, msg)
+	}
+	sourceQueue.mu.Unlock()
+
+	return movedCount
+}
+
 // Helper functions
 func calculateMD5(s string) string {
 	hash := md5.Sum([]byte(s))
 	return hex.EncodeToString(hash[:])
+}
+
+func parseRedrivePolicy(policyJSON string) *RedrivePolicy {
+	// Simple JSON parsing for RedrivePolicy
+	// Format: {"deadLetterTargetArn":"arn:aws:sqs:us-east-1:000000000000:my-dlq","maxReceiveCount":3}
+	policy := &RedrivePolicy{}
+
+	// Extract deadLetterTargetArn
+	if start := findJSONValue(policyJSON, "deadLetterTargetArn"); start != "" {
+		policy.DeadLetterTargetArn = start
+	}
+
+	// Extract maxReceiveCount
+	if countStr := findJSONValue(policyJSON, "maxReceiveCount"); countStr != "" {
+		if count, err := strconv.Atoi(countStr); err == nil {
+			policy.MaxReceiveCount = count
+		}
+	}
+
+	return policy
+}
+
+func parseRedriveAllowPolicy(policyJSON string) *RedriveAllowPolicy {
+	policy := &RedriveAllowPolicy{}
+
+	if permission := findJSONValue(policyJSON, "redrivePermission"); permission != "" {
+		policy.RedrivePermission = permission
+	}
+
+	return policy
+}
+
+func findJSONValue(jsonStr, key string) string {
+	// Simple JSON value extraction (not a full parser)
+	keyPattern := "\"" + key + "\""
+	keyIndex := -1
+	for i := 0; i < len(jsonStr)-len(keyPattern); i++ {
+		if jsonStr[i:i+len(keyPattern)] == keyPattern {
+			keyIndex = i + len(keyPattern)
+			break
+		}
+	}
+
+	if keyIndex == -1 {
+		return ""
+	}
+
+	// Find the colon
+	colonIndex := -1
+	for i := keyIndex; i < len(jsonStr); i++ {
+		if jsonStr[i] == ':' {
+			colonIndex = i
+			break
+		}
+	}
+
+	if colonIndex == -1 {
+		return ""
+	}
+
+	// Find the value start
+	valueStart := -1
+	isString := false
+	for i := colonIndex + 1; i < len(jsonStr); i++ {
+		if jsonStr[i] == '"' {
+			valueStart = i + 1
+			isString = true
+			break
+		} else if jsonStr[i] >= '0' && jsonStr[i] <= '9' {
+			valueStart = i
+			break
+		}
+	}
+
+	if valueStart == -1 {
+		return ""
+	}
+
+	// Find the value end
+	valueEnd := valueStart
+	if isString {
+		for i := valueStart; i < len(jsonStr); i++ {
+			if jsonStr[i] == '"' && (i == 0 || jsonStr[i-1] != '\\') {
+				valueEnd = i
+				break
+			}
+		}
+	} else {
+		for i := valueStart; i < len(jsonStr); i++ {
+			if jsonStr[i] == ',' || jsonStr[i] == '}' {
+				valueEnd = i
+				break
+			}
+		}
+	}
+
+	return jsonStr[valueStart:valueEnd]
+}
+
+func extractQueueNameFromArn(arn string) string {
+	// ARN format: arn:aws:sqs:region:account-id:queue-name
+	parts := make([]string, 0)
+	current := ""
+	for _, ch := range arn {
+		if ch == ':' {
+			parts = append(parts, current)
+			current = ""
+		} else {
+			current += string(ch)
+		}
+	}
+	parts = append(parts, current)
+
+	if len(parts) >= 6 {
+		return parts[5]
+	}
+	return ""
 }
