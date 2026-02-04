@@ -162,16 +162,24 @@ func handleCreateQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type CreateQueueResponse struct {
-		XMLName xml.Name `xml:"CreateQueueResponse"`
+		XMLName xml.Name `xml:"CreateQueueResponse" json:"-"`
 		Result  struct {
-			QueueUrl string `xml:"QueueUrl"`
-		} `xml:"CreateQueueResult"`
+			QueueUrl string `xml:"QueueUrl" json:"QueueUrl"`
+		} `xml:"CreateQueueResult" json:"-"`
+	}
+
+	type CreateQueueJSONResponse struct {
+		QueueUrl string `json:"QueueUrl"`
 	}
 
 	resp := CreateQueueResponse{}
 	resp.Result.QueueUrl = "http://" + r.Host + queue.URL
 
-	sendXMLResponse(w, resp)
+	jsonResp := CreateQueueJSONResponse{
+		QueueUrl: "http://" + r.Host + queue.URL,
+	}
+
+	sendResponse(w, r, resp, jsonResp)
 }
 
 func handleDeleteQueue(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +192,7 @@ func handleDeleteQueue(w http.ResponseWriter, r *http.Request) {
 			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
 			return
 		}
-		
+
 		if url, ok := jsonBody["QueueUrl"].(string); ok {
 			queueURL = url
 		}
@@ -219,7 +227,7 @@ func handleListQueues(w http.ResponseWriter, r *http.Request) {
 			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
 			return
 		}
-		
+
 		if p, ok := jsonBody["QueueNamePrefix"].(string); ok {
 			prefix = p
 		}
@@ -235,18 +243,29 @@ func handleListQueues(w http.ResponseWriter, r *http.Request) {
 	urls := queueManager.ListQueues(prefix)
 
 	type ListQueuesResponse struct {
-		XMLName xml.Name `xml:"ListQueuesResponse"`
+		XMLName xml.Name `xml:"ListQueuesResponse" json:"-"`
 		Result  struct {
-			QueueUrls []string `xml:"QueueUrl"`
-		} `xml:"ListQueuesResult"`
+			QueueUrls []string `xml:"QueueUrl" json:"QueueUrls"`
+		} `xml:"ListQueuesResult" json:"-"`
+	}
+
+	type ListQueuesJSONResponse struct {
+		QueueUrls []string `json:"QueueUrls"`
 	}
 
 	resp := ListQueuesResponse{}
+	fullUrls := []string{}
 	for _, url := range urls {
-		resp.Result.QueueUrls = append(resp.Result.QueueUrls, "http://"+r.Host+url)
+		fullUrl := "http://" + r.Host + url
+		resp.Result.QueueUrls = append(resp.Result.QueueUrls, fullUrl)
+		fullUrls = append(fullUrls, fullUrl)
 	}
 
-	sendXMLResponse(w, resp)
+	jsonResp := ListQueuesJSONResponse{
+		QueueUrls: fullUrls,
+	}
+
+	sendResponse(w, r, resp, jsonResp)
 }
 
 func handleSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -299,18 +318,28 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	msg := queue.SendMessage(body, attributes, delaySeconds)
 
 	type SendMessageResponse struct {
-		XMLName xml.Name `xml:"SendMessageResponse"`
+		XMLName xml.Name `xml:"SendMessageResponse" json:"-"`
 		Result  struct {
-			MD5OfMessageBody string `xml:"MD5OfMessageBody"`
-			MessageId        string `xml:"MessageId"`
-		} `xml:"SendMessageResult"`
+			MD5OfMessageBody string `xml:"MD5OfMessageBody" json:"MD5OfMessageBody"`
+			MessageId        string `xml:"MessageId" json:"MessageId"`
+		} `xml:"SendMessageResult" json:"-"`
+	}
+
+	type SendMessageJSONResponse struct {
+		MD5OfMessageBody string `json:"MD5OfMessageBody"`
+		MessageId        string `json:"MessageId"`
 	}
 
 	resp := SendMessageResponse{}
 	resp.Result.MD5OfMessageBody = msg.MD5OfBody
 	resp.Result.MessageId = msg.MessageID
 
-	sendXMLResponse(w, resp)
+	jsonResp := SendMessageJSONResponse{
+		MD5OfMessageBody: msg.MD5OfBody,
+		MessageId:        msg.MessageID,
+	}
+
+	sendResponse(w, r, resp, jsonResp)
 }
 
 func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
@@ -361,15 +390,15 @@ func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 	messages := queue.ReceiveMessages(maxMessages, visibilityTimeout, waitTimeSeconds)
 
 	type MessageElement struct {
-		MessageId     string `xml:"MessageId"`
-		ReceiptHandle string `xml:"ReceiptHandle"`
-		MD5OfBody     string `xml:"MD5OfBody"`
-		Body          string `xml:"Body"`
+		MessageId     string `xml:"MessageId" json:"MessageId"`
+		ReceiptHandle string `xml:"ReceiptHandle" json:"ReceiptHandle"`
+		MD5OfBody     string `xml:"MD5OfBody" json:"MD5OfBody"`
+		Body          string `xml:"Body" json:"Body"`
 	}
 
 	type ReceiveMessageResponse struct {
-		XMLName  xml.Name         `xml:"ReceiveMessageResponse"`
-		Messages []MessageElement `xml:"ReceiveMessageResult>Message"`
+		XMLName  xml.Name         `xml:"ReceiveMessageResponse" json:"-"`
+		Messages []MessageElement `xml:"ReceiveMessageResult>Message" json:"Messages"`
 	}
 
 	resp := ReceiveMessageResponse{}
@@ -382,7 +411,8 @@ func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	sendXMLResponse(w, resp)
+	// Send JSON or XML based on request type
+	sendResponse(w, r, resp, resp)
 }
 
 func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
@@ -440,7 +470,7 @@ func handleGetQueueAttributes(w http.ResponseWriter, r *http.Request) {
 			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
 			return
 		}
-		
+
 		if url, ok := jsonBody["QueueUrl"].(string); ok {
 			queueURL = url
 		}
@@ -496,7 +526,7 @@ func handlePurgeQueue(w http.ResponseWriter, r *http.Request) {
 			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
 			return
 		}
-		
+
 		if url, ok := jsonBody["QueueUrl"].(string); ok {
 			queueURL = url
 		}
@@ -578,6 +608,24 @@ func sendXMLResponse(w http.ResponseWriter, v interface{}) {
 	encoder.Indent("", "  ")
 	if err := encoder.Encode(v); err != nil {
 		log.Printf("Error encoding XML: %v", err)
+	}
+}
+
+func sendJSONResponse(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("Error encoding JSON: %v", err)
+	}
+}
+
+func sendResponse(w http.ResponseWriter, r *http.Request, xmlData interface{}, jsonData interface{}) {
+	// If X-Amz-Target header is present, send JSON response
+	if r.Header.Get("X-Amz-Target") != "" {
+		sendJSONResponse(w, jsonData)
+	} else {
+		sendXMLResponse(w, xmlData)
 	}
 }
 
