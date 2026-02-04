@@ -719,6 +719,9 @@ func adminUIHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	w.Write(data)
 }
 
@@ -974,6 +977,17 @@ func adminExportConfigHandler(w http.ResponseWriter, r *http.Request) {
 		configYAML.WriteString(fmt.Sprintf("    visibility_timeout: %d\n", queue.VisibilityTimeout))
 		configYAML.WriteString(fmt.Sprintf("    message_retention_period: %d\n", queue.MessageRetentionPeriod))
 		configYAML.WriteString(fmt.Sprintf("    maximum_message_size: %d\n", queue.MaximumMessageSize))
+		if queue.FifoQueue {
+			configYAML.WriteString(fmt.Sprintf("    fifo_queue: true\n"))
+			if queue.ContentBasedDeduplication {
+				configYAML.WriteString(fmt.Sprintf("    content_based_deduplication: true\n"))
+			}
+		}
+		if queue.RedrivePolicy != nil {
+			configYAML.WriteString(fmt.Sprintf("    redrive_policy:\n"))
+			configYAML.WriteString(fmt.Sprintf("      dead_letter_target_arn: %s\n", queue.RedrivePolicy.DeadLetterTargetArn))
+			configYAML.WriteString(fmt.Sprintf("      max_receive_count: %d\n", queue.RedrivePolicy.MaxReceiveCount))
+		}
 		queue.mu.RUnlock()
 	}
 

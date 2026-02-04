@@ -109,8 +109,11 @@ func (qm *QueueManager) CreateQueue(name string, attributes map[string]string) (
 		sequenceNumber:         0,
 	}
 
-	// Check if this is a FIFO queue
+	// Check if this is a FIFO queue (by name or by attribute)
 	if len(name) > 5 && name[len(name)-5:] == ".fifo" {
+		queue.FifoQueue = true
+	}
+	if fifoAttr, ok := attributes["FifoQueue"]; ok && fifoAttr == "true" {
 		queue.FifoQueue = true
 	}
 
