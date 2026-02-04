@@ -1,0 +1,10 @@
+services:
+  ess-queue-ess:
+    build: .
+    ports:
+      - "9324:9324"
+    environment:
+      - PORT=9324
+    volumes:
+      - ./data:/app/data
+    container_name: ess-queue-ess

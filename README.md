@@ -1,0 +1,208 @@
+# Ess-Queue-Ess
+
+A lightweight, AWS SQS-compatible message queue emulator for local development and testing.
+
+## Overview
+
+Ess-Queue-Ess provides a local AWS Simple Queue Service (SQS) emulator that implements the core SQS API operations. Perfect for development, testing, and CI/CD pipelines without requiring AWS credentials or incurring AWS costs.
+
+## Features
+
+- **Core SQS Operations**: CreateQueue, DeleteQueue, ListQueues, SendMessage, ReceiveMessage, DeleteMessage
+- **Queue Attributes**: Get and monitor queue statistics (message counts, visibility settings)
+- **Message Management**: Visibility timeout, message retention, delay delivery
+- **SQS API Compatible**: Works with AWS SDKs by pointing endpoint to localhost
+- **Docker Support**: Run as a containerized service with docker-compose
+- **Zero Configuration**: Works out of the box with sensible defaults
+- **Lightweight**: Minimal dependencies, fast startup
+
+## Limitations
+
+This emulator is designed for local development and testing. It intentionally does not implement:
+
+- **No Persistence**: Messages are stored in-memory only; they are lost on restart
+- **No FIFO Queues**: Only standard queues are supported
+- **No Dead Letter Queues**: DLQ functionality not implemented
+- **No Message Deduplication**: Deduplication IDs are not supported
+- **No IAM/Authentication**: All requests are accepted without authentication
+- **No Encryption**: Server-side encryption (SSE) not supported
+- **Simplified Message Attributes**: Basic support only
+
+These limitations keep the emulator simple and fast for development purposes.
+
+## QUICKSTART
+
+See [QUICKSTART.md](QUICKSTART.md) for a quick getting started guide.
+
+## Installation
+
+### Using Docker (Recommended)
+
+```bash
+git clone https://github.com/tonyellard/ess-queue-ess.git
+cd ess-queue-ess
+docker compose up -d
+```
+
+The service will be available at `http://localhost:9324`
+
+### Using Go
+
+```bash
+git clone https://github.com/tonyellard/ess-queue-ess.git
+cd ess-queue-ess
+make build
+make run
+```
+
+## Usage
+
+### With AWS SDK (Python boto3)
+
+```python
+import boto3
+
+# Configure boto3 to use local endpoint
+sqs = boto3.client('sqs',
+    endpoint_url='http://localhost:9324',
+    region_name='us-east-1',
+    aws_access_key_id='dummy',
+    aws_secret_access_key='dummy'
+)
+
+# Create a queue
+response = sqs.create_queue(QueueName='my-queue')
+queue_url = response['QueueUrl']
+
+# Send a message
+sqs.send_message(
+    QueueUrl=queue_url,
+    MessageBody='Hello from Ess-Queue-Ess!'
+)
+
+# Receive messages
+messages = sqs.receive_message(
+    QueueUrl=queue_url,
+    MaxNumberOfMessages=10
+)
+
+# Process and delete
+for msg in messages.get('Messages', []):
+    print(msg['Body'])
+    sqs.delete_message(
+        QueueUrl=queue_url,
+        ReceiptHandle=msg['ReceiptHandle']
+    )
+```
+
+### With AWS CLI
+
+```bash
+# Set endpoint
+export AWS_ENDPOINT_URL=http://localhost:9324
+
+# Create queue
+aws sqs create-queue --queue-name test-queue
+
+# Send message
+aws sqs send-message --queue-url http://localhost:9324/test-queue --message-body "Test message"
+
+# Receive messages
+aws sqs receive-message --queue-url http://localhost:9324/test-queue
+
+# Delete queue
+aws sqs delete-queue --queue-url http://localhost:9324/test-queue
+```
+
+## Configuration
+
+### Environment Variables
+
+- `PORT`: Server port (default: 9324)
+
+### Docker Compose
+
+```yaml
+services:
+  ess-queue-ess:
+    image: ess-queue-ess:latest
+    ports:
+      - "9324:9324"
+    environment:
+      - PORT=9324
+```
+
+## Makefile Commands
+
+```bash
+make help              # Show all available commands
+make build             # Build the Go binary
+make run               # Run locally
+make test              # Run unit tests
+make docker-build      # Build Docker image
+make docker-run        # Start with docker-compose
+make docker-stop       # Stop docker-compose
+make docker-logs       # View container logs
+```
+
+## Supported SQS Operations
+
+- ✅ CreateQueue
+- ✅ DeleteQueue
+- ✅ ListQueues
+- ✅ SendMessage
+- ✅ ReceiveMessage
+- ✅ DeleteMessage
+- ✅ GetQueueAttributes
+- ✅ PurgeQueue
+
+Not yet implemented:
+- ⏳ SendMessageBatch
+- ⏳ DeleteMessageBatch
+- ⏳ ChangeMessageVisibility
+- ⏳ SetQueueAttributes
+
+## Development
+
+### Project Structure
+
+```
+ess-queue-ess/
+├── main.go           # HTTP server and routing
+├── handlers.go       # SQS API request handlers
+├── queue.go          # Queue and message data structures
+├── Dockerfile        # Multi-stage Docker build
+├── docker-compose.yml
+├── Makefile
+└── README.md
+```
+
+### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/tonyellard/ess-queue-ess.git
+cd ess-queue-ess
+
+# Download dependencies
+make deps
+
+# Build
+make build
+
+# Run tests
+make test
+
+# Run locally
+make run
+```
+
+## Support
+
+[TBD] - Issue tracker and contribution guidelines coming soon.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+
+**Trademark Notice**: Not affiliated with, endorsed by, or sponsored by Amazon Web Services (AWS). Amazon SQS is a trademark of Amazon.com, Inc. or its affiliates.
