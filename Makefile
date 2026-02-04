@@ -1,9 +1,10 @@
-.PHONY: build run test clean docker-build docker-run docker-stop help
+.PHONY: build run run-with-config test clean docker-build docker-run docker-stop config help
 
 # Variables
 BINARY_NAME=ess-queue-ess
 DOCKER_IMAGE=ess-queue-ess:latest
 PORT=9324
+CONFIG_FILE=config.yaml
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -18,6 +19,10 @@ build: ## Build the Go binary
 run: ## Run the application locally
 	@echo "Running $(BINARY_NAME) on port $(PORT)..."
 	PORT=$(PORT) go run .
+
+run-with-config: config ## Run with configuration file
+	@echo "Running $(BINARY_NAME) with config on port $(PORT)..."
+	PORT=$(PORT) go run . --config $(CONFIG_FILE)
 
 test: ## Run unit tests
 	@echo "Running tests..."
@@ -58,5 +63,13 @@ deps: ## Download Go dependencies
 	@echo "Downloading dependencies..."
 	go mod download
 	go mod tidy
+
+config: ## Create config.yaml from example
+	@if [ ! -f $(CONFIG_FILE) ]; then \
+		cp config.example.yaml $(CONFIG_FILE); \
+		echo "Created $(CONFIG_FILE) from example"; \
+	else \
+		echo "$(CONFIG_FILE) already exists"; \
+	fi
 
 all: build ## Build everything

@@ -115,6 +115,18 @@ func (qm *QueueManager) ListQueues(prefix string) []string {
 	return urls
 }
 
+// GetAllQueues returns all queues (for admin UI)
+func (qm *QueueManager) GetAllQueues() []*Queue {
+	qm.mu.RLock()
+	defer qm.mu.RUnlock()
+
+	queues := make([]*Queue, 0, len(qm.queues))
+	for _, queue := range qm.queues {
+		queues = append(queues, queue)
+	}
+	return queues
+}
+
 // SendMessage adds a message to the queue
 func (q *Queue) SendMessage(body string, attributes map[string]interface{}, delaySeconds int) *Message {
 	q.mu.Lock()

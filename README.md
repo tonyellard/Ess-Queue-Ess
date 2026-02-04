@@ -11,6 +11,8 @@ Ess-Queue-Ess provides a local AWS Simple Queue Service (SQS) emulator that impl
 - **Core SQS Operations**: CreateQueue, DeleteQueue, ListQueues, SendMessage, ReceiveMessage, DeleteMessage
 - **Queue Attributes**: Get and monitor queue statistics (message counts, visibility settings)
 - **Message Management**: Visibility timeout, message retention, delay delivery
+- **Web Admin UI**: Browser-based interface to inspect queues and messages in real-time
+- **Configuration Bootstrap**: Define queues in YAML config to auto-create on startup
 - **SQS API Compatible**: Works with AWS SDKs by pointing endpoint to localhost
 - **Docker Support**: Run as a containerized service with docker-compose
 - **Zero Configuration**: Works out of the box with sensible defaults
@@ -114,7 +116,58 @@ aws sqs receive-message --queue-url http://localhost:9324/test-queue
 aws sqs delete-queue --queue-url http://localhost:9324/test-queue
 ```
 
+## Admin Web Interface
+
+Access the web-based admin UI to inspect queues and messages:
+
+```
+http://localhost:9324/admin
+```
+
+The admin interface provides:
+- Real-time queue statistics (total, visible, in-flight, delayed messages)
+- List of all queues with message counts
+- Expandable view to inspect message contents
+- Auto-refresh every 5 seconds
+- Click any queue to view its messages
+
 ## Configuration
+
+### Bootstrap Queues with YAML
+
+Create queues automatically on startup using a configuration file:
+
+1. **Create config.yaml** (or use the example):
+   ```bash
+   make config  # Creates config.yaml from config.example.yaml
+   ```
+
+2. **Edit config.yaml**:
+   ```yaml
+   server:
+     port: 9324
+     host: "0.0.0.0"
+
+   queues:
+     - name: "my-app-queue"
+       visibility_timeout: 30
+       message_retention_period: 345600  # 4 days
+       maximum_message_size: 262144      # 256KB
+       delay_seconds: 0
+       receive_message_wait_time: 0
+   ```
+
+3. **Run with config**:
+   ```bash
+   # Using Go
+   make run-with-config
+   
+   # Or directly
+   ./ess-queue-ess --config config.yaml
+   
+   # Docker (config.yaml is auto-mounted)
+   docker compose up -d
+   ```
 
 ### Environment Variables
 
@@ -130,6 +183,9 @@ services:
       - "9324:9324"
     environment:
       - PORT=9324
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    command: ["./ess-queue-ess", "--config", "/app/config.yaml"]
 ```
 
 ## Makefile Commands
@@ -138,6 +194,8 @@ services:
 make help              # Show all available commands
 make build             # Build the Go binary
 make run               # Run locally
+make run-with-config   # Run with config.yaml
+make config            # Create config.yaml from example
 make test              # Run unit tests
 make docker-build      # Build Docker image
 make docker-run        # Start with docker-compose

@@ -7,4 +7,6 @@ services:
       - PORT=9324
     volumes:
       - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    command: ["./ess-queue-ess", "--config", "/app/config.yaml"]
     container_name: ess-queue-ess

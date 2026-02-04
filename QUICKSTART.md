@@ -22,12 +22,15 @@ Get Ess-Queue-Ess running in under 5 minutes.
    # Should return: {"status":"healthy"}
    ```
 
-3. **Create your first queue** (using AWS CLI):
+3. **Open the Admin UI**:
+   Open your browser to `http://localhost:9324/admin` to see the web interface with pre-configured queues from the example config.
+
+4. **Create your first queue** (using AWS CLI):
    ```bash
    aws sqs create-queue --queue-name my-first-queue --endpoint-url http://localhost:9324
    ```
 
-4. **Send a message**:
+5. **Send a message**:
    ```bash
    aws sqs send-message \
      --queue-url http://localhost:9324/my-first-queue \
@@ -35,12 +38,14 @@ Get Ess-Queue-Ess running in under 5 minutes.
      --endpoint-url http://localhost:9324
    ```
 
-5. **Receive the message**:
+6. **Receive the message**:
    ```bash
    aws sqs receive-message \
      --queue-url http://localhost:9324/my-first-queue \
      --endpoint-url http://localhost:9324
    ```
+
+7. **View in Admin UI**: Refresh the admin page to see your new queue and message!
 
 ## Quick Start with Go
 
@@ -51,7 +56,9 @@ Get Ess-Queue-Ess running in under 5 minutes.
    make run
    ```
 
-2. **In another terminal, test the service**:
+2. **Open Admin UI**: Visit `http://localhost:9324/admin` in your browser
+
+3. **In another terminal, test the service**:
    ```bash
    # Create queue
    curl -X POST http://localhost:9324/ \
@@ -65,6 +72,30 @@ Get Ess-Queue-Ess running in under 5 minutes.
    curl -X POST http://localhost:9324/ \
      -d "Action=ReceiveMessage&QueueUrl=http://localhost:9324/test-queue&MaxNumberOfMessages=10"
    ```
+
+## Bootstrap Queues with Configuration
+
+1. **Create a config file**:
+   ```bash
+   make config  # Creates config.yaml from example
+   ```
+
+2. **Edit config.yaml** to define your queues:
+   ```yaml
+   queues:
+     - name: "my-app-queue"
+       visibility_timeout: 30
+       message_retention_period: 345600
+   ```
+
+3. **Run with config**:
+   ```bash
+   make run-with-config
+   # OR
+   docker compose up -d  # Config is auto-mounted
+   ```
+
+Your queues will be created automatically on startup!
 
 ## Using with Your Application
 

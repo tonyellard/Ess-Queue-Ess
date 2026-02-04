@@ -3,6 +3,7 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"encoding/xml"
 	"io"
@@ -11,7 +12,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
+
+//go:embed admin.html
+var adminHTML embed.FS
 
 var queueManager = NewQueueManager()
 
@@ -346,4 +351,86 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain")
 	io.WriteString(w, "Ess-Queue-Ess - AWS SQS Emulator\n")
+}
+
+// Admin UI handler
+func adminUIHandler(w http.ResponseWriter, r *http.Request) {
+	data, err := adminHTML.ReadFile("admin.html")
+	if err != nil {
+		http.Error(w, "Admin UI not found", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	w.Write(data)
+}
+
+// Admin API: Queue details
+type QueueDetails struct {
+	Name            string           `json:"name"`
+	URL             string           `json:"url"`
+	MessageCount    int              `json:"message_count"`
+	VisibleCount    int              `json:"visible_count"`
+	NotVisibleCount int              `json:"not_visible_count"`
+	DelayedCount    int              `json:"delayed_count"`
+	Messages        []MessageDetails `json:"messages"`
+}
+
+type MessageDetails struct {
+	MessageID     string    `json:"message_id"`
+	Body          string    `json:"body"`
+	MD5OfBody     string    `json:"md5_of_body"`
+	SentTimestamp time.Time `json:"sent_timestamp"`
+	ReceiveCount  int       `json:"receive_count"`
+	ReceiptHandle string    `json:"receipt_handle,omitempty"`
+}
+
+func adminAPIHandler(w http.ResponseWriter, r *http.Request) {
+	queues := queueManager.GetAllQueues()
+
+	queueDetails := make([]QueueDetails, 0, len(queues))
+	for _, queue := range queues {
+		queue.mu.RLock()
+
+		now := time.Now()
+		visibleCount := 0
+		notVisibleCount := 0
+		delayedCount := 0
+
+		messages := make([]MessageDetails, 0, len(queue.Messages))
+		for _, msg := range queue.Messages {
+			if now.Before(msg.DelayUntil) {
+				delayedCount++
+			} else if now.Before(msg.VisibilityTimeout) {
+				notVisibleCount++
+			} else {
+				visibleCount++
+			}
+
+			messages = append(messages, MessageDetails{
+				MessageID:     msg.MessageID,
+				Body:          msg.Body,
+				MD5OfBody:     msg.MD5OfBody,
+				SentTimestamp: msg.SentTimestamp,
+				ReceiveCount:  msg.ReceiveCount,
+				ReceiptHandle: msg.ReceiptHandle,
+			})
+		}
+
+		queueDetails = append(queueDetails, QueueDetails{
+			Name:            queue.Name,
+			URL:             queue.URL,
+			MessageCount:    len(queue.Messages),
+			VisibleCount:    visibleCount,
+			NotVisibleCount: notVisibleCount,
+			DelayedCount:    delayedCount,
+			Messages:        messages,
+		})
+
+		queue.mu.RUnlock()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"queues": queueDetails,
+	})
 }

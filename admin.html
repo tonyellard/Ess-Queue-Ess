@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ess-Queue-Ess Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+        .header {
+            background: #232f3e;
+            color: white;
+            padding: 1.5rem 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+        .header p {
+            color: #aaa;
+            margin-top: 0.5rem;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .stat-card h3 {
+            color: #666;
+            font-size: 0.9rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            margin-bottom: 0.5rem;
+        }
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #ff9900;
+        }
+        .queues-section {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .section-header {
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .section-header h2 {
+            font-size: 1.3rem;
+            font-weight: 600;
+        }
+        .refresh-btn {
+            background: #ff9900;
+            color: white;
+            border: none;
+            padding: 0.5rem 1.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .refresh-btn:hover {
+            background: #ec7211;
+        }
+        .queue-list {
+            list-style: none;
+        }
+        .queue-item {
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .queue-header {
+            padding: 1.5rem 2rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+        .queue-header:hover {
+            background: #fafafa;
+        }
+        .queue-name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #232f3e;
+        }
+        .queue-stats {
+            display: flex;
+            gap: 2rem;
+            font-size: 0.9rem;
+            color: #666;
+        }
+        .queue-stat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .queue-stat .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            margin-bottom: 0.25rem;
+        }
+        .queue-stat .count {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #ff9900;
+        }
+        .messages-container {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            background: #fafafa;
+        }
+        .messages-container.expanded {
+            max-height: 2000px;
+        }
+        .messages {
+            padding: 1rem 2rem 2rem 2rem;
+        }
+        .message-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .message-id {
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #666;
+        }
+        .message-time {
+            font-size: 0.85rem;
+            color: #999;
+        }
+        .message-body {
+            font-family: monospace;
+            font-size: 0.9rem;
+            background: #f5f5f5;
+            padding: 0.75rem;
+            border-radius: 4px;
+            word-break: break-all;
+            white-space: pre-wrap;
+        }
+        .message-meta {
+            display: flex;
+            gap: 1.5rem;
+            margin-top: 0.5rem;
+            font-size: 0.8rem;
+            color: #666;
+        }
+        .no-messages {
+            text-align: center;
+            color: #999;
+            padding: 2rem;
+            font-style: italic;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: #999;
+        }
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 1rem;
+            opacity: 0.3;
+        }
+        .expand-icon {
+            transition: transform 0.3s;
+        }
+        .expand-icon.rotated {
+            transform: rotate(180deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚀 Ess-Queue-Ess Admin</h1>
+        <p>AWS SQS Emulator - Queue and Message Inspector</p>
+    </div>
+
+    <div class="container">
+        <div class="stats" id="stats">
+            <!-- Stats will be populated by JavaScript -->
+        </div>
+
+        <div class="queues-section">
+            <div class="section-header">
+                <h2>Queues</h2>
+                <button class="refresh-btn" onclick="loadQueues()">↻ Refresh</button>
+            </div>
+            <ul class="queue-list" id="queueList">
+                <!-- Queues will be populated by JavaScript -->
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        let queuesData = [];
+
+        async function loadQueues() {
+            try {
+                const response = await fetch('/admin/api/queues');
+                const data = await response.json();
+                queuesData = data.queues || [];
+                renderStats();
+                renderQueues();
+            } catch (error) {
+                console.error('Failed to load queues:', error);
+            }
+        }
+
+        function renderStats() {
+            const totalQueues = queuesData.length;
+            const totalMessages = queuesData.reduce((sum, q) => sum + q.message_count, 0);
+            const totalVisible = queuesData.reduce((sum, q) => sum + q.visible_count, 0);
+            const totalNotVisible = queuesData.reduce((sum, q) => sum + q.not_visible_count, 0);
+
+            const statsHtml = `
+                <div class="stat-card">
+                    <h3>Total Queues</h3>
+                    <div class="value">${totalQueues}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Messages</h3>
+                    <div class="value">${totalMessages}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Visible Messages</h3>
+                    <div class="value">${totalVisible}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>In Flight</h3>
+                    <div class="value">${totalNotVisible}</div>
+                </div>
+            `;
+            document.getElementById('stats').innerHTML = statsHtml;
+        }
+
+        function renderQueues() {
+            const queueList = document.getElementById('queueList');
+            
+            if (queuesData.length === 0) {
+                queueList.innerHTML = `
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            <line x1="9" y1="9" x2="15" y2="15"/>
+                            <line x1="15" y1="9" x2="9" y2="15"/>
+                        </svg>
+                        <p>No queues available. Create a queue using the SQS API.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const queuesHtml = queuesData.map((queue, index) => {
+                const messagesHtml = queue.messages && queue.messages.length > 0
+                    ? queue.messages.map(msg => `
+                        <div class="message-card">
+                            <div class="message-header">
+                                <span class="message-id">ID: ${msg.message_id}</span>
+                                <span class="message-time">${new Date(msg.sent_timestamp).toLocaleString()}</span>
+                            </div>
+                            <div class="message-body">${escapeHtml(msg.body)}</div>
+                            <div class="message-meta">
+                                <span>Receive Count: ${msg.receive_count}</span>
+                                <span>MD5: ${msg.md5_of_body.substring(0, 8)}...</span>
+                            </div>
+                        </div>
+                    `).join('')
+                    : '<div class="no-messages">No messages in this queue</div>';
+
+                return `
+                    <li class="queue-item">
+                        <div class="queue-header" onclick="toggleMessages(${index})">
+                            <span class="queue-name">${queue.name}</span>
+                            <div style="display: flex; align-items: center; gap: 2rem;">
+                                <div class="queue-stats">
+                                    <div class="queue-stat">
+                                        <span class="label">Visible</span>
+                                        <span class="count">${queue.visible_count}</span>
+                                    </div>
+                                    <div class="queue-stat">
+                                        <span class="label">In Flight</span>
+                                        <span class="count">${queue.not_visible_count}</span>
+                                    </div>
+                                    <div class="queue-stat">
+                                        <span class="label">Delayed</span>
+                                        <span class="count">${queue.delayed_count}</span>
+                                    </div>
+                                </div>
+                                <span class="expand-icon" id="icon-${index}">▼</span>
+                            </div>
+                        </div>
+                        <div class="messages-container" id="messages-${index}">
+                            <div class="messages">
+                                ${messagesHtml}
+                            </div>
+                        </div>
+                    </li>
+                `;
+            }).join('');
+
+            queueList.innerHTML = queuesHtml;
+        }
+
+        function toggleMessages(index) {
+            const container = document.getElementById(`messages-${index}`);
+            const icon = document.getElementById(`icon-${index}`);
+            container.classList.toggle('expanded');
+            icon.classList.toggle('rotated');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Load queues on page load
+        loadQueues();
+
+        // Auto-refresh every 5 seconds
+        setInterval(loadQueues, 5000);
+    </script>
+</body>
+</html>

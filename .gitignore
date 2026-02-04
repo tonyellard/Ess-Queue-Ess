@@ -2,6 +2,9 @@
 data/
 queues/
 
+# Config files (use config.example.yaml as template)
+config.yaml
+
 # Go build artifacts
 *.exe
 *.exe~

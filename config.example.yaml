@@ -1,0 +1,30 @@
+server:
+  port: 9324
+  host: "0.0.0.0"
+
+# Queues to create at startup
+queues:
+  - name: "default-queue"
+    visibility_timeout: 30
+    message_retention_period: 345600  # 4 days in seconds
+    maximum_message_size: 262144      # 256KB in bytes
+    delay_seconds: 0
+    receive_message_wait_time: 0
+    attributes: {}
+
+  - name: "fast-queue"
+    visibility_timeout: 10
+    message_retention_period: 86400   # 1 day
+    maximum_message_size: 131072      # 128KB
+    delay_seconds: 0
+    receive_message_wait_time: 0
+    attributes: {}
+
+  # Example with longer visibility timeout for processing heavy tasks
+  - name: "long-process-queue"
+    visibility_timeout: 300  # 5 minutes
+    message_retention_period: 1209600  # 14 days
+    maximum_message_size: 262144
+    delay_seconds: 0
+    receive_message_wait_time: 20  # Long polling
+    attributes: {}
