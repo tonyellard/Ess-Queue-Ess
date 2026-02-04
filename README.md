@@ -100,6 +100,11 @@ for msg in messages.get('Messages', []):
 ### With AWS CLI
 
 ```bash
+# Set dummy credentials (required even for local testing)
+export AWS_ACCESS_KEY_ID=dummy
+export AWS_SECRET_ACCESS_KEY=dummy
+export AWS_DEFAULT_REGION=us-east-1
+
 # Set endpoint
 export AWS_ENDPOINT_URL=http://localhost:9324
 
@@ -115,6 +120,8 @@ aws sqs receive-message --queue-url http://localhost:9324/test-queue
 # Delete queue
 aws sqs delete-queue --queue-url http://localhost:9324/test-queue
 ```
+
+**Note**: The AWS CLI requires credentials even for local endpoints. Use dummy values as shown above.
 
 ## Admin Web Interface
 
