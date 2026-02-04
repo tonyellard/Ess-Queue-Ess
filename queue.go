@@ -3,6 +3,8 @@
 package main
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"strconv"
 	"sync"
 	"time"
@@ -230,6 +232,6 @@ func (q *Queue) GetAttributes() map[string]string {
 
 // Helper functions
 func calculateMD5(s string) string {
-	// Simplified - should use crypto/md5
-	return "00000000000000000000000000000000"
+	hash := md5.Sum([]byte(s))
+	return hex.EncodeToString(hash[:])
 }

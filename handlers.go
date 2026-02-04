@@ -417,9 +417,10 @@ func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 
 func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	var queueURL, receiptHandle string
+	isJSON := r.Header.Get("X-Amz-Target") != ""
 
 	// Check if this is a JSON request
-	if r.Header.Get("X-Amz-Target") != "" {
+	if isJSON {
 		jsonBody, err := parseRequestJSON(r)
 		if err != nil {
 			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
@@ -451,10 +452,14 @@ func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if queue.DeleteMessage(receiptHandle) {
-		type DeleteMessageResponse struct {
-			XMLName xml.Name `xml:"DeleteMessageResponse"`
+		if isJSON {
+			sendJSONResponse(w, struct{}{})
+		} else {
+			type DeleteMessageResponse struct {
+				XMLName xml.Name `xml:"DeleteMessageResponse"`
+			}
+			sendXMLResponse(w, DeleteMessageResponse{})
 		}
-		sendXMLResponse(w, DeleteMessageResponse{})
 	} else {
 		sendError(w, "ReceiptHandleIsInvalid", "Invalid receipt handle", http.StatusBadRequest)
 	}
@@ -462,9 +467,10 @@ func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 
 func handleGetQueueAttributes(w http.ResponseWriter, r *http.Request) {
 	var queueURL string
+	isJSON := r.Header.Get("X-Amz-Target") != ""
 
 	// Check if this is a JSON request
-	if r.Header.Get("X-Amz-Target") != "" {
+	if isJSON {
 		jsonBody, err := parseRequestJSON(r)
 		if err != nil {
 			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
@@ -493,27 +499,39 @@ func handleGetQueueAttributes(w http.ResponseWriter, r *http.Request) {
 
 	attrs := queue.GetAttributes()
 
-	type Attribute struct {
-		Name  string `xml:"Name"`
-		Value string `xml:"Value"`
-	}
+	if isJSON {
+		// JSON response for AWS SDK
+		type GetQueueAttributesJSONResponse struct {
+			Attributes map[string]string `json:"Attributes"`
+		}
+		resp := GetQueueAttributesJSONResponse{
+			Attributes: attrs,
+		}
+		sendJSONResponse(w, resp)
+	} else {
+		// XML response for Query protocol
+		type Attribute struct {
+			Name  string `xml:"Name"`
+			Value string `xml:"Value"`
+		}
 
-	type GetQueueAttributesResponse struct {
-		XMLName xml.Name `xml:"GetQueueAttributesResponse"`
-		Result  struct {
-			Attributes []Attribute `xml:"Attribute"`
-		} `xml:"GetQueueAttributesResult"`
-	}
+		type GetQueueAttributesResponse struct {
+			XMLName xml.Name `xml:"GetQueueAttributesResponse"`
+			Result  struct {
+				Attributes []Attribute `xml:"Attribute"`
+			} `xml:"GetQueueAttributesResult"`
+		}
 
-	resp := GetQueueAttributesResponse{}
-	for name, value := range attrs {
-		resp.Result.Attributes = append(resp.Result.Attributes, Attribute{
-			Name:  name,
-			Value: value,
-		})
-	}
+		resp := GetQueueAttributesResponse{}
+		for name, value := range attrs {
+			resp.Result.Attributes = append(resp.Result.Attributes, Attribute{
+				Name:  name,
+				Value: value,
+			})
+		}
 
-	sendXMLResponse(w, resp)
+		sendXMLResponse(w, resp)
+	}
 }
 
 func handlePurgeQueue(w http.ResponseWriter, r *http.Request) {
