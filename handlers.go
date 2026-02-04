@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -433,4 +434,170 @@ func adminAPIHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"queues": queueDetails,
 	})
+}
+
+// adminCreateQueueHandler creates a new queue via the admin API
+func adminCreateQueueHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name                   string `json:"name"`
+		VisibilityTimeout      int    `json:"visibility_timeout"`
+		MessageRetentionPeriod int    `json:"message_retention_period"`
+		MaxMessageSize         int    `json:"max_message_size"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "Queue name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set defaults if not provided
+	if req.VisibilityTimeout == 0 {
+		req.VisibilityTimeout = 30
+	}
+	if req.MessageRetentionPeriod == 0 {
+		req.MessageRetentionPeriod = 345600 // 4 days in seconds
+	}
+	if req.MaxMessageSize == 0 {
+		req.MaxMessageSize = 262144 // 256 KB
+	}
+
+	// Build attributes map
+	attributes := make(map[string]string)
+	attributes["VisibilityTimeout"] = strconv.Itoa(req.VisibilityTimeout)
+	attributes["MessageRetentionPeriod"] = strconv.Itoa(req.MessageRetentionPeriod)
+	attributes["MaximumMessageSize"] = strconv.Itoa(req.MaxMessageSize)
+
+	queue, err := queueManager.CreateQueue(req.Name, attributes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update queue settings
+	queue.mu.Lock()
+	queue.VisibilityTimeout = req.VisibilityTimeout
+	queue.MessageRetentionPeriod = req.MessageRetentionPeriod
+	queue.MaximumMessageSize = req.MaxMessageSize
+	queue.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"queue": map[string]interface{}{
+			"name":                     queue.Name,
+			"url":                      queue.URL,
+			"visibility_timeout":       queue.VisibilityTimeout,
+			"message_retention_period": queue.MessageRetentionPeriod,
+			"maximum_message_size":     queue.MaximumMessageSize,
+		},
+	})
+}
+
+// adminDeleteQueueHandler deletes a queue via the admin API
+func adminDeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	queueName := r.URL.Query().Get("name")
+	if queueName == "" {
+		http.Error(w, "Queue name is required", http.StatusBadRequest)
+		return
+	}
+
+	queueManager.DeleteQueue(queueName)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Queue '%s' deleted successfully", queueName),
+	})
+}
+
+// adminSendMessageHandler sends a test message to a queue via the admin API
+func adminSendMessageHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		QueueName    string            `json:"queue_name"`
+		MessageBody  string            `json:"message_body"`
+		DelaySeconds int               `json:"delay_seconds"`
+		Attributes   map[string]string `json:"attributes"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueName == "" || req.MessageBody == "" {
+		http.Error(w, "Queue name and message body are required", http.StatusBadRequest)
+		return
+	}
+
+	queue, exists := queueManager.GetQueue(req.QueueName)
+	if !exists {
+		http.Error(w, "Queue not found", http.StatusNotFound)
+		return
+	}
+
+	// Convert string map to interface map for attributes
+	attrs := make(map[string]interface{})
+	for k, v := range req.Attributes {
+		attrs[k] = v
+	}
+
+	message := queue.SendMessage(req.MessageBody, attrs, req.DelaySeconds)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"message_id": message.MessageID,
+		"queue_name": req.QueueName,
+	})
+}
+
+// adminExportConfigHandler exports the current queue configuration as YAML
+func adminExportConfigHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	queues := queueManager.GetAllQueues()
+
+	var configYAML strings.Builder
+	configYAML.WriteString("# Ess-Queue-Ess Configuration\n")
+	configYAML.WriteString("# Generated on: " + time.Now().Format(time.RFC3339) + "\n\n")
+	configYAML.WriteString("server:\n")
+	configYAML.WriteString("  port: 9324\n")
+	configYAML.WriteString("  host: 0.0.0.0\n\n")
+	configYAML.WriteString("queues:\n")
+
+	for _, queue := range queues {
+		queue.mu.RLock()
+		configYAML.WriteString(fmt.Sprintf("  - name: %s\n", queue.Name))
+		configYAML.WriteString(fmt.Sprintf("    visibility_timeout: %d\n", queue.VisibilityTimeout))
+		configYAML.WriteString(fmt.Sprintf("    message_retention_period: %d\n", queue.MessageRetentionPeriod))
+		configYAML.WriteString(fmt.Sprintf("    maximum_message_size: %d\n", queue.MaximumMessageSize))
+		queue.mu.RUnlock()
+	}
+
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.Header().Set("Content-Disposition", "attachment; filename=config.yaml")
+	w.Write([]byte(configYAML.String()))
 }

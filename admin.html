@@ -207,6 +207,134 @@
         .expand-icon.rotated {
             transform: rotate(180deg);
         }
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        .modal-header h2 {
+            font-size: 1.5rem;
+            color: #232f3e;
+        }
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #999;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .close-btn:hover {
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #333;
+        }
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            font-family: inherit;
+        }
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+            font-family: monospace;
+        }
+        .form-group small {
+            display: block;
+            margin-top: 0.25rem;
+            color: #666;
+            font-size: 0.85rem;
+        }
+        .btn {
+            background: #ff9900;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .btn:hover {
+            background: #ec7211;
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        .btn-small {
+            padding: 0.4rem 1rem;
+            font-size: 0.85rem;
+        }
+        .btn-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1.5rem;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+            margin-left: 1rem;
+        }
+        .queue-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
     </style>
 </head>
 <body>
@@ -223,11 +351,99 @@
         <div class="queues-section">
             <div class="section-header">
                 <h2>Queues</h2>
-                <button class="refresh-btn" onclick="loadQueues()">↻ Refresh</button>
+                <div class="action-buttons">
+                    <button class="btn btn-small" onclick="showCreateQueueModal()">+ Create Queue</button>
+                    <button class="btn btn-secondary btn-small" onclick="exportConfig()">⬇ Export Config</button>
+                    <button class="btn btn-secondary btn-small" onclick="loadQueues()">↻ Refresh</button>
+                </div>
             </div>
             <ul class="queue-list" id="queueList">
                 <!-- Queues will be populated by JavaScript -->
             </ul>
+        </div>
+    </div>
+
+    <!-- Create Queue Modal -->
+    <div id="createQueueModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Queue</h2>
+                <button class="close-btn" onclick="closeModal('createQueueModal')">&times;</button>
+            </div>
+            <form id="createQueueForm" onsubmit="createQueue(event)">
+                <div class="form-group">
+                    <label for="queueName">Queue Name *</label>
+                    <input type="text" id="queueName" required pattern="[a-zA-Z0-9_-]+" 
+                           placeholder="my-queue" maxlength="80">
+                    <small>Alphanumeric characters, hyphens, and underscores only</small>
+                </div>
+                <div class="form-group">
+                    <label for="visibilityTimeout">Visibility Timeout (seconds)</label>
+                    <input type="number" id="visibilityTimeout" value="30" min="0" max="43200">
+                    <small>Default: 30 seconds</small>
+                </div>
+                <div class="form-group">
+                    <label for="messageRetention">Message Retention Period (seconds)</label>
+                    <input type="number" id="messageRetention" value="345600" min="60" max="1209600">
+                    <small>Default: 345600 seconds (4 days)</small>
+                </div>
+                <div class="form-group">
+                    <label for="maxMessageSize">Maximum Message Size (bytes)</label>
+                    <input type="number" id="maxMessageSize" value="262144" min="1024" max="262144">
+                    <small>Default: 262144 bytes (256 KB)</small>
+                </div>
+                <div class="btn-group">
+                    <button type="submit" class="btn">Create Queue</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('createQueueModal')">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Send Message Modal -->
+    <div id="sendMessageModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Send Test Message</h2>
+                <button class="close-btn" onclick="closeModal('sendMessageModal')">&times;</button>
+            </div>
+            <form id="sendMessageForm" onsubmit="sendMessage(event)">
+                <input type="hidden" id="targetQueueName">
+                <div class="form-group">
+                    <label for="messageBody">Message Body *</label>
+                    <textarea id="messageBody" required placeholder="Enter your message body here..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="delaySeconds">Delay (seconds)</label>
+                    <input type="number" id="delaySeconds" value="0" min="0" max="900">
+                    <small>Delay before message becomes available (0-900 seconds)</small>
+                </div>
+                <div class="btn-group">
+                    <button type="submit" class="btn">Send Message</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('sendMessageModal')">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Queue Modal -->
+    <div id="deleteQueueModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Delete Queue</h2>
+                <button class="close-btn" onclick="closeModal('deleteQueueModal')">&times;</button>
+            </div>
+            <div>
+                <input type="hidden" id="deleteQueueName">
+                <p style="margin-bottom: 1.5rem; color: #666;">
+                    Are you sure you want to delete queue <strong id="deleteQueueNameDisplay"></strong>?
+                    This action cannot be undone.
+                </p>
+                <div class="btn-group">
+                    <button class="btn btn-danger" onclick="deleteQueue()">Delete Queue</button>
+                    <button class="btn btn-secondary" onclick="closeModal('deleteQueueModal')">Cancel</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -326,6 +542,10 @@
                                         <span class="count">${queue.delayed_count}</span>
                                     </div>
                                 </div>
+                                <div class="queue-actions" onclick="event.stopPropagation()">
+                                    <button class="btn btn-small" onclick="showSendMessageModal('${queue.name}')">📤 Send</button>
+                                    <button class="btn btn-danger btn-small" onclick="showDeleteQueueModal('${queue.name}')">🗑 Delete</button>
+                                </div>
                                 <span class="expand-icon" id="icon-${index}">▼</span>
                             </div>
                         </div>
@@ -352,6 +572,152 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Modal functions
+        function showModal(modalId) {
+            document.getElementById(modalId).classList.add('show');
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('show');
+        }
+
+        function showCreateQueueModal() {
+            document.getElementById('createQueueForm').reset();
+            showModal('createQueueModal');
+        }
+
+        function showSendMessageModal(queueName) {
+            document.getElementById('sendMessageForm').reset();
+            document.getElementById('targetQueueName').value = queueName;
+            showModal('sendMessageModal');
+        }
+
+        function showDeleteQueueModal(queueName) {
+            document.getElementById('deleteQueueName').value = queueName;
+            document.getElementById('deleteQueueNameDisplay').textContent = queueName;
+            showModal('deleteQueueModal');
+        }
+
+        // API functions
+        async function createQueue(event) {
+            event.preventDefault();
+            
+            const queueData = {
+                name: document.getElementById('queueName').value,
+                visibility_timeout: parseInt(document.getElementById('visibilityTimeout').value),
+                message_retention_period: parseInt(document.getElementById('messageRetention').value),
+                max_message_size: parseInt(document.getElementById('maxMessageSize').value)
+            };
+
+            try {
+                const response = await fetch('/admin/api/queue', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(queueData)
+                });
+
+                if (response.ok) {
+                    closeModal('createQueueModal');
+                    await loadQueues();
+                    alert(`Queue "${queueData.name}" created successfully!`);
+                } else {
+                    const error = await response.text();
+                    alert(`Failed to create queue: ${error}`);
+                }
+            } catch (error) {
+                console.error('Error creating queue:', error);
+                alert('Failed to create queue. Please try again.');
+            }
+        }
+
+        async function deleteQueue() {
+            const queueName = document.getElementById('deleteQueueName').value;
+
+            try {
+                const response = await fetch(`/admin/api/queue?name=${encodeURIComponent(queueName)}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    closeModal('deleteQueueModal');
+                    await loadQueues();
+                    alert(`Queue "${queueName}" deleted successfully!`);
+                } else {
+                    const error = await response.text();
+                    alert(`Failed to delete queue: ${error}`);
+                }
+            } catch (error) {
+                console.error('Error deleting queue:', error);
+                alert('Failed to delete queue. Please try again.');
+            }
+        }
+
+        async function sendMessage(event) {
+            event.preventDefault();
+            
+            const messageData = {
+                queue_name: document.getElementById('targetQueueName').value,
+                message_body: document.getElementById('messageBody').value,
+                delay_seconds: parseInt(document.getElementById('delaySeconds').value),
+                attributes: {}
+            };
+
+            try {
+                const response = await fetch('/admin/api/message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(messageData)
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    closeModal('sendMessageModal');
+                    await loadQueues();
+                    alert(`Message sent successfully!\nMessage ID: ${result.message_id}`);
+                } else {
+                    const error = await response.text();
+                    alert(`Failed to send message: ${error}`);
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+                alert('Failed to send message. Please try again.');
+            }
+        }
+
+        async function exportConfig() {
+            try {
+                const response = await fetch('/admin/api/config/export');
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'config.yaml';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                } else {
+                    alert('Failed to export configuration');
+                }
+            } catch (error) {
+                console.error('Error exporting config:', error);
+                alert('Failed to export configuration. Please try again.');
+            }
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            if (event.target.classList.contains('modal')) {
+                event.target.classList.remove('show');
+            }
         }
 
         // Load queues on page load

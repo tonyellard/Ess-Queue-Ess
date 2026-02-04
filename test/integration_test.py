@@ -237,6 +237,93 @@ def test_admin_api_with_messages():
     # Cleanup
     sqs_request('DeleteQueue', {'QueueUrl': queue_url})
 
+def test_admin_create_queue():
+    print_test("Admin API - Create Queue")
+    
+    queue_data = {
+        "name": "admin-test-queue",
+        "visibility_timeout": 60,
+        "message_retention_period": 86400,
+        "max_message_size": 131072
+    }
+    
+    response = requests.post(f"{BASE_URL}/admin/api/queue", json=queue_data)
+    assert response.status_code == 200, f"Failed to create queue via admin API: {response.text}"
+    
+    data = response.json()
+    assert data['success'] == True, "Expected success=true"
+    assert data['queue']['name'] == "admin-test-queue", f"Queue name mismatch: {data}"
+    assert data['queue']['visibility_timeout'] == 60, f"Visibility timeout mismatch: {data}"
+    
+    print_success("Queue created successfully via admin API")
+    
+def test_admin_send_message():
+    print_test("Admin API - Send Message")
+    
+    message_data = {
+        "queue_name": "admin-test-queue",
+        "message_body": "Test message from admin API",
+        "delay_seconds": 0,
+        "attributes": {}
+    }
+    
+    response = requests.post(f"{BASE_URL}/admin/api/message", json=message_data)
+    assert response.status_code == 200, f"Failed to send message via admin API: {response.text}"
+    
+    data = response.json()
+    assert data['success'] == True, "Expected success=true"
+    assert 'message_id' in data, "Missing message_id in response"
+    
+    print_success(f"Message sent successfully via admin API (ID: {data['message_id']})")
+    
+    # Verify message was sent by checking admin API
+    response = requests.get(f"{BASE_URL}/admin/api/queues")
+    data = response.json()
+    queues = {q['name']: q for q in data['queues']}
+    
+    admin_queue = queues.get('admin-test-queue')
+    assert admin_queue is not None, "Queue not found in admin API"
+    assert admin_queue['visible_count'] == 1, f"Expected 1 visible message, got {admin_queue['visible_count']}"
+    
+    print_success("Message visible in queue via admin API")
+
+def test_admin_export_config():
+    print_test("Admin API - Export Config")
+    
+    response = requests.get(f"{BASE_URL}/admin/api/config/export")
+    assert response.status_code == 200, f"Failed to export config: {response.status_code}"
+    assert response.headers.get('Content-Type') == 'application/x-yaml', "Wrong content type"
+    assert 'config.yaml' in response.headers.get('Content-Disposition', ''), "Missing filename"
+    
+    config_text = response.text
+    assert 'server:' in config_text, "Missing server section in config"
+    assert 'queues:' in config_text, "Missing queues section in config"
+    assert 'admin-test-queue' in config_text, "Queue not found in exported config"
+    assert 'visibility_timeout: 60' in config_text, "Queue settings not in config"
+    
+    print_success("Config exported successfully")
+    print_info(f"Config size: {len(config_text)} bytes")
+
+def test_admin_delete_queue():
+    print_test("Admin API - Delete Queue")
+    
+    response = requests.delete(f"{BASE_URL}/admin/api/queue?name=admin-test-queue")
+    assert response.status_code == 200, f"Failed to delete queue via admin API: {response.text}"
+    
+    data = response.json()
+    assert data['success'] == True, "Expected success=true"
+    assert 'deleted successfully' in data['message'].lower(), f"Unexpected message: {data['message']}"
+    
+    print_success("Queue deleted successfully via admin API")
+    
+    # Verify queue is gone
+    response = requests.get(f"{BASE_URL}/admin/api/queues")
+    data = response.json()
+    queue_names = [q['name'] for q in data['queues']]
+    assert 'admin-test-queue' not in queue_names, "Queue still exists after deletion"
+    
+    print_success("Queue confirmed deleted")
+
 def run_all_tests():
     print(f"\n{Colors.BLUE}{'='*60}{Colors.END}")
     print(f"{Colors.BLUE}  Ess-Queue-Ess Integration Tests{Colors.END}")
@@ -267,6 +354,12 @@ def run_all_tests():
         
         # Admin integration
         test_admin_api_with_messages()
+        
+        # New admin API tests
+        test_admin_create_queue()
+        test_admin_send_message()
+        test_admin_export_config()
+        test_admin_delete_queue()
         
         print(f"\n{Colors.GREEN}{'='*60}{Colors.END}")
         print(f"{Colors.GREEN}  ✓ All tests passed!{Colors.END}")

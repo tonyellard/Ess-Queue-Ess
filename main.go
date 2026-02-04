@@ -53,6 +53,10 @@ func main() {
 	r.Get("/health", healthHandler)
 	r.Get("/admin", adminUIHandler)
 	r.Get("/admin/api/queues", adminAPIHandler)
+	r.Post("/admin/api/queue", adminCreateQueueHandler)
+	r.Delete("/admin/api/queue", adminDeleteQueueHandler)
+	r.Post("/admin/api/message", adminSendMessageHandler)
+	r.Get("/admin/api/config/export", adminExportConfigHandler)
 	r.HandleFunc("/*", rootHandler)
 
 	log.Printf("Starting Ess-Queue-Ess on port %s", port)
