@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -803,6 +804,11 @@ func adminAPIHandler(w http.ResponseWriter, r *http.Request) {
 
 		queue.mu.RUnlock()
 	}
+
+	// Sort queues alphabetically by name for consistent display
+	sort.Slice(queueDetails, func(i, j int) bool {
+		return queueDetails[i].Name < queueDetails[j].Name
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
