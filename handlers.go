@@ -370,6 +370,7 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 	var queueURL string
 	var maxMessages, visibilityTimeout int
+	var visibilityTimeoutProvided bool
 
 	// Check if this is a JSON request
 	if r.Header.Get("X-Amz-Target") != "" {
@@ -389,18 +390,20 @@ func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		if vis, ok := jsonBody["VisibilityTimeout"].(float64); ok {
 			visibilityTimeout = int(vis)
-		} else {
-			visibilityTimeout = 30
+			visibilityTimeoutProvided = true
 		}
 	} else {
 		// Form-encoded request
 		if err := r.ParseForm(); err != nil {
-			sendError(w, "InvalidParameterValue", "Failed to parse request", http.StatusBadRequest)
+			sendError(w, "InvalidParameterValue", "Failed to parse JSON request", http.StatusBadRequest)
 			return
 		}
 		queueURL = r.FormValue("QueueUrl")
 		maxMessages = parseIntDefault(r.FormValue("MaxNumberOfMessages"), 1)
-		visibilityTimeout = parseIntDefault(r.FormValue("VisibilityTimeout"), 30)
+		if r.FormValue("VisibilityTimeout") != "" {
+			visibilityTimeout = parseIntDefault(r.FormValue("VisibilityTimeout"), 0)
+			visibilityTimeoutProvided = true
+		}
 	}
 
 	queueName := extractQueueName(queueURL)
@@ -410,6 +413,11 @@ func handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		sendError(w, "NonExistentQueue", "Queue does not exist", http.StatusBadRequest)
 		return
+	}
+
+	// Use queue's default visibility timeout if not provided in request
+	if !visibilityTimeoutProvided {
+		visibilityTimeout = queue.VisibilityTimeout
 	}
 
 	messages := queue.ReceiveMessages(maxMessages, visibilityTimeout, waitTimeSeconds)
@@ -983,6 +991,7 @@ func adminExportConfigHandler(w http.ResponseWriter, r *http.Request) {
 		configYAML.WriteString(fmt.Sprintf("    visibility_timeout: %d\n", queue.VisibilityTimeout))
 		configYAML.WriteString(fmt.Sprintf("    message_retention_period: %d\n", queue.MessageRetentionPeriod))
 		configYAML.WriteString(fmt.Sprintf("    maximum_message_size: %d\n", queue.MaximumMessageSize))
+		configYAML.WriteString(fmt.Sprintf("    max_receive_count: %d\n", queue.MaxReceiveCount))
 		if queue.FifoQueue {
 			configYAML.WriteString(fmt.Sprintf("    fifo_queue: true\n"))
 			if queue.ContentBasedDeduplication {

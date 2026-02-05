@@ -86,6 +86,21 @@ sequence_number = response['SequenceNumber']
 
 DLQs capture messages that fail processing after a specified number of receive attempts.
 
+### DLQ Timing and Behavior
+
+**Important**: Messages move to DLQ based on visibility timeout expiration, not immediately on receive:
+
+1. Message is received (ReceiveCount increments, visibility timeout starts)
+2. If not deleted, message becomes visible again after visibility timeout expires
+3. **Background checker** (runs every 1 second) checks if `ReceiveCount >= MaxReceiveCount`
+4. If threshold reached, message is automatically moved to DLQ
+
+This means with `MaxReceiveCount=2` and `VisibilityTimeout=30` seconds:
+- Receive #1: Message invisible for 30s → becomes visible
+- Receive #2: Message invisible for 30s → becomes visible → moved to DLQ (within 1s of expiry)
+
+**Admin UI Auto-Creation**: The admin interface provides a checkbox to automatically create a DLQ with the naming convention `{queue-name}-dlq` (or `{queue-name}-dlq.fifo` for FIFO queues), eliminating the chicken-and-egg problem of creating the DLQ before the main queue.
+
 ### Creating a DLQ Setup
 
 ```python
@@ -120,15 +135,24 @@ main_response = sqs.create_queue(
 
 1. **Normal Processing**: Messages are received and processed from the main queue
 2. **Failed Processing**: If a message is received but not deleted (processing failed)
-3. **Receive Count**: Each receive increments the message's receive count
-4. **Auto-Move**: When receive count reaches `maxReceiveCount`, message moves to DLQ
-5. **Analysis**: Inspect failed messages in DLQ to debug issues
+3. **Visibility Timeout**: Message becomes invisible for the configured timeout period
+4. **Receive Count**: Each receive increments the message's receive count
+5. **Timeout Expiration**: When visibility timeout expires, message becomes visible again
+6. **Auto-Move**: Background checker (every 1 second) moves messages to DLQ when `ReceiveCount >= MaxReceiveCount`
+7. **Analysis**: Inspect failed messages in DLQ to debug issues
+
+**Visibility Timeout**: When receiving messages, you can specify a visibility timeout:
+- If not specified, uses the queue's default `VisibilityTimeout` setting
+- Can be overridden per request with `--visibility-timeout` (CLI) or `VisibilityTimeout` parameter (SDK)
 
 ### Example: Processing with DLQ
 
 ```python
-# Receive message
-response = sqs.receive_message(QueueUrl=main_queue_url)
+# Receive message with specific visibility timeout (optional - defaults to queue's setting)
+response = sqs.receive_message(
+    QueueUrl=main_queue_url,
+    VisibilityTimeout=30  # Optional: override queue default
+)
 
 if 'Messages' in response:
     for message in response['Messages']:
@@ -142,8 +166,9 @@ if 'Messages' in response:
                 ReceiptHandle=message['ReceiptHandle']
             )
         except Exception as e:
-            # Don't delete - let it go back to queue
-            # After maxReceiveCount attempts, moves to DLQ
+            # Don't delete - let visibility timeout expire
+            # Message will become visible again
+            # After maxReceiveCount attempts (visibility timeouts), moves to DLQ
             print(f"Processing failed: {e}")
 ```
 

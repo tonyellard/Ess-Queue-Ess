@@ -27,6 +27,7 @@ type QueueConfig struct {
 	VisibilityTimeout      int               `yaml:"visibility_timeout"`        // seconds, default 30
 	MessageRetentionPeriod int               `yaml:"message_retention_period"`  // seconds, default 345600 (4 days)
 	MaximumMessageSize     int               `yaml:"maximum_message_size"`      // bytes, default 262144 (256KB)
+	MaxReceiveCount        int               `yaml:"max_receive_count"`         // default 3
 	DelaySeconds           int               `yaml:"delay_seconds"`             // default 0
 	ReceiveMessageWaitTime int               `yaml:"receive_message_wait_time"` // seconds, default 0
 	Attributes             map[string]string `yaml:"attributes"`                // additional custom attributes
@@ -64,6 +65,9 @@ func LoadConfig(path string) (*Config, error) {
 		if q.MaximumMessageSize == 0 {
 			q.MaximumMessageSize = 262144 // 256KB
 		}
+		if q.MaxReceiveCount == 0 {
+			q.MaxReceiveCount = 3
+		}
 		if q.Attributes == nil {
 			q.Attributes = make(map[string]string)
 		}
@@ -84,6 +88,7 @@ func BootstrapQueues(config *Config) error {
 		queue.VisibilityTimeout = queueCfg.VisibilityTimeout
 		queue.MessageRetentionPeriod = queueCfg.MessageRetentionPeriod
 		queue.MaximumMessageSize = queueCfg.MaximumMessageSize
+		queue.MaxReceiveCount = queueCfg.MaxReceiveCount
 		queue.DelaySeconds = queueCfg.DelaySeconds
 		queue.ReceiveMessageWaitTime = queueCfg.ReceiveMessageWaitTime
 	}

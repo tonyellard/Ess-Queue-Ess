@@ -5,6 +5,7 @@ package main
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ type Queue struct {
 	MaximumMessageSize     int // bytes
 	DelaySeconds           int
 	ReceiveMessageWaitTime int // seconds (long polling)
+	MaxReceiveCount        int // maximum receive count before DLQ (if configured)
 
 	// FIFO configuration
 	FifoQueue                 bool
@@ -59,6 +61,9 @@ type Queue struct {
 	// DLQ configuration
 	RedrivePolicy      *RedrivePolicy
 	RedriveAllowPolicy *RedriveAllowPolicy
+
+	// Background processing
+	stopChan chan struct{}
 }
 
 // RedrivePolicy defines Dead Letter Queue configuration
@@ -105,9 +110,14 @@ func (qm *QueueManager) CreateQueue(name string, attributes map[string]string) (
 		MaximumMessageSize:     262144, // default 256 KB
 		DelaySeconds:           0,
 		ReceiveMessageWaitTime: 0,
+		MaxReceiveCount:        3, // default max receive count
 		deduplicationCache:     make(map[string]time.Time),
 		sequenceNumber:         0,
+		stopChan:               make(chan struct{}),
 	}
+
+	// Start background goroutine to check visibility timeouts and DLQ
+	go queue.backgroundChecker()
 
 	// Check if this is a FIFO queue (by name or by attribute)
 	if len(name) > 5 && name[len(name)-5:] == ".fifo" {
@@ -120,6 +130,13 @@ func (qm *QueueManager) CreateQueue(name string, attributes map[string]string) (
 	// Parse FIFO attributes
 	if contentBased, ok := attributes["ContentBasedDeduplication"]; ok && contentBased == "true" {
 		queue.ContentBasedDeduplication = true
+	}
+
+	// Parse MaxReceiveCount
+	if maxReceiveStr, ok := attributes["MaxReceiveCount"]; ok {
+		if maxReceive, err := strconv.Atoi(maxReceiveStr); err == nil && maxReceive > 0 {
+			queue.MaxReceiveCount = maxReceive
+		}
 	}
 
 	// Parse RedrivePolicy
@@ -148,7 +165,9 @@ func (qm *QueueManager) GetQueue(name string) (*Queue, bool) {
 func (qm *QueueManager) DeleteQueue(name string) bool {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
-	if _, exists := qm.queues[name]; exists {
+	if queue, exists := qm.queues[name]; exists {
+		// Stop background checker
+		close(queue.stopChan)
 		delete(qm.queues, name)
 		return true
 	}
@@ -229,6 +248,52 @@ func (q *Queue) SendMessage(body string, attributes map[string]interface{}, dela
 	return msg
 }
 
+// backgroundChecker runs every second to check for expired visibility timeouts and move messages to DLQ
+func (q *Queue) backgroundChecker() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			q.checkVisibilityTimeoutsAndDLQ()
+		case <-q.stopChan:
+			return
+		}
+	}
+}
+
+// checkVisibilityTimeoutsAndDLQ checks for messages with expired visibility timeouts that should move to DLQ
+func (q *Queue) checkVisibilityTimeoutsAndDLQ() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.RedrivePolicy == nil {
+		return // No DLQ configured
+	}
+
+	now := time.Now()
+	messagesToMove := make([]*Message, 0)
+
+	for _, msg := range q.Messages {
+		// Check if message is currently visible (visibility timeout has expired)
+		if now.After(msg.VisibilityTimeout) && now.After(msg.DelayUntil) {
+			// If message has been received MaxReceiveCount times or more, move to DLQ
+			if msg.ReceiveCount >= q.RedrivePolicy.MaxReceiveCount {
+				// Log for debugging
+				log.Printf("[DLQ] Queue %s: Moving message %s to DLQ (ReceiveCount=%d, MaxReceiveCount=%d, VisibilityTimeout=%v, Now=%v)",
+					q.Name, msg.MessageID, msg.ReceiveCount, q.RedrivePolicy.MaxReceiveCount, msg.VisibilityTimeout, now)
+				messagesToMove = append(messagesToMove, msg)
+			}
+		}
+	}
+
+	// Move messages to DLQ
+	for _, msg := range messagesToMove {
+		q.moveToDLQ(msg)
+	}
+}
+
 // ReceiveMessages retrieves messages from the queue
 func (q *Queue) ReceiveMessages(maxMessages int, visibilityTimeout int, waitTimeSeconds int) []*Message {
 	q.mu.Lock()
@@ -272,8 +337,6 @@ func (q *Queue) ReceiveMessages(maxMessages int, visibilityTimeout int, waitTime
 	}
 
 	// Mark messages as invisible and set receipt handles
-	// Also check if message should be moved to DLQ
-	messagesToMove := make([]*Message, 0)
 	for _, msg := range available {
 		msg.ReceiptHandle = uuid.New().String()
 		msg.VisibilityTimeout = now.Add(time.Duration(visibilityTimeout) * time.Second)
@@ -281,16 +344,8 @@ func (q *Queue) ReceiveMessages(maxMessages int, visibilityTimeout int, waitTime
 		if msg.ReceiveCount == 1 {
 			msg.FirstReceivedTime = now
 		}
-
-		// Check if message should be moved to DLQ
-		if q.RedrivePolicy != nil && msg.ReceiveCount >= q.RedrivePolicy.MaxReceiveCount {
-			messagesToMove = append(messagesToMove, msg)
-		}
-	}
-
-	// Move messages to DLQ after iteration to avoid modifying slice during iteration
-	for _, msg := range messagesToMove {
-		q.moveToDLQ(msg)
+		log.Printf("[RECEIVE] Queue %s: Message %s received (ReceiveCount=%d, VisibilityTimeout set to %v, timeout param=%ds)",
+			q.Name, msg.MessageID, msg.ReceiveCount, msg.VisibilityTimeout, visibilityTimeout)
 	}
 
 	return available

@@ -8,6 +8,7 @@ queues:
     visibility_timeout: 30
     message_retention_period: 345600  # 4 days in seconds
     maximum_message_size: 262144      # 256KB in bytes
+    max_receive_count: 3               # Maximum receives before DLQ (if configured)
     delay_seconds: 0
     receive_message_wait_time: 0
     attributes: {}
@@ -16,6 +17,7 @@ queues:
     visibility_timeout: 10
     message_retention_period: 86400   # 1 day
     maximum_message_size: 131072      # 128KB
+    max_receive_count: 5
     delay_seconds: 0
     receive_message_wait_time: 0
     attributes: {}
@@ -25,6 +27,41 @@ queues:
     visibility_timeout: 300  # 5 minutes
     message_retention_period: 1209600  # 14 days
     maximum_message_size: 262144
+    max_receive_count: 3
     delay_seconds: 0
     receive_message_wait_time: 20  # Long polling
     attributes: {}
+
+  # Example FIFO queue with content-based deduplication
+  - name: "orders.fifo"
+    visibility_timeout: 30
+    message_retention_period: 345600
+    maximum_message_size: 262144
+    max_receive_count: 3
+    delay_seconds: 0
+    receive_message_wait_time: 0
+    attributes:
+      FifoQueue: "true"
+      ContentBasedDeduplication: "true"
+
+  # Example Dead Letter Queue
+  - name: "failed-messages-dlq"
+    visibility_timeout: 30
+    message_retention_period: 1209600  # Keep failed messages for 14 days
+    maximum_message_size: 262144
+    max_receive_count: 1
+    delay_seconds: 0
+    receive_message_wait_time: 0
+    attributes: {}
+
+  # Example queue with DLQ configuration
+  - name: "main-queue-with-dlq"
+    visibility_timeout: 30
+    message_retention_period: 345600
+    maximum_message_size: 262144
+    max_receive_count: 3
+    delay_seconds: 0
+    receive_message_wait_time: 0
+    attributes:
+      RedrivePolicy: '{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:000000000000:failed-messages-dlq","maxReceiveCount":3}'
+

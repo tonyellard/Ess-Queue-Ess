@@ -145,6 +145,9 @@ The admin interface provides:
 - **Real-time queue statistics** (total, visible, in-flight, delayed messages)
 - **Queue management**:
   - Create new queues with custom settings (visibility timeout, retention, message size)
+  - **Auto-create DLQ**: Checkbox option to automatically create a Dead Letter Queue with naming convention `{queue-name}-dlq`
+  - Configure FIFO queues with content-based deduplication
+  - Set max receive count for DLQ behavior
   - Delete queues with confirmation dialog
   - Send test messages to any queue
   - Export current queue configuration as YAML

@@ -433,18 +433,16 @@
                     <small>Default: 262144 bytes (256 KB)</small>
                 </div>
                 <div class="form-group">
-                    <label for="dlqTarget">Dead Letter Queue (Optional)</label>
-                    <select id="dlqTarget">
-                        <option value="">-- No DLQ --</option>
-                    </select>
-                    <small>Queue to send messages after max receive count</small>
+                    <label for="maxReceiveCount">Max Receive Count</label>
+                    <input type="number" id="maxReceiveCount" value="3" min="1" max="1000">
+                    <small>Maximum times a message can be received before moving to DLQ (if enabled)</small>
                 </div>
-                <div id="dlqOptions" style="display: none;">
-                    <div class="form-group">
-                        <label for="maxReceiveCount">Max Receive Count</label>
-                        <input type="number" id="maxReceiveCount" value="3" min="1" max="1000">
-                        <small>Number of receives before moving to DLQ</small>
-                    </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="createDlq" onchange="toggleDlqOptions()">
+                        Create Dead Letter Queue
+                    </label>
+                    <small>Automatically create a DLQ named {queue-name}-dlq</small>
                 </div>
                 <div class="btn-group">
                     <button type="submit" class="btn">Create Queue</button>
@@ -666,20 +664,6 @@
         function showCreateQueueModal() {
             document.getElementById('createQueueForm').reset();
             document.getElementById('fifoOptions').style.display = 'none';
-            document.getElementById('dlqOptions').style.display = 'none';
-            
-            // Populate DLQ dropdown with existing queues
-            const dlqSelect = document.getElementById('dlqTarget');
-            dlqSelect.innerHTML = '<option value="">-- No DLQ --</option>';
-            queuesData.forEach(queue => {
-                dlqSelect.innerHTML += `<option value="${queue.name}">${queue.name}</option>`;
-            });
-            
-            // Add onchange handler for DLQ dropdown
-            dlqSelect.onchange = function() {
-                document.getElementById('dlqOptions').style.display = this.value ? 'block' : 'none';
-            };
-            
             showModal('createQueueModal');
         }
 
@@ -726,10 +710,52 @@
             
             let queueName = document.getElementById('queueName').value;
             const isFifo = document.getElementById('isFifoQueue').checked;
+            const createDlq = document.getElementById('createDlq').checked;
+            const maxReceiveCount = parseInt(document.getElementById('maxReceiveCount').value);
             
             // Ensure .fifo suffix for FIFO queues
             if (isFifo && !queueName.endsWith('.fifo')) {
                 queueName += '.fifo';
+            }
+            
+            let dlqName = null;
+            
+            // Create DLQ first if requested
+            if (createDlq) {
+                // Generate DLQ name
+                dlqName = queueName.replace(/\.fifo$/, '') + '-dlq' + (isFifo ? '.fifo' : '');
+                
+                const dlqData = {
+                    name: dlqName,
+                    visibility_timeout: parseInt(document.getElementById('visibilityTimeout').value),
+                    message_retention_period: parseInt(document.getElementById('messageRetention').value),
+                    max_message_size: parseInt(document.getElementById('maxMessageSize').value),
+                    attributes: {}
+                };
+                
+                if (isFifo) {
+                    dlqData.attributes.FifoQueue = 'true';
+                }
+                
+                try {
+                    const dlqResponse = await fetch('/admin/api/queue', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(dlqData)
+                    });
+                    
+                    if (!dlqResponse.ok) {
+                        const error = await dlqResponse.text();
+                        alert(`Failed to create DLQ: ${error}`);
+                        return;
+                    }
+                } catch (error) {
+                    console.error('Error creating DLQ:', error);
+                    alert('Failed to create DLQ. Please try again.');
+                    return;
+                }
             }
             
             const queueData = {
@@ -748,12 +774,13 @@
                 }
             }
 
-            // Add DLQ configuration
-            const dlqTarget = document.getElementById('dlqTarget').value;
-            if (dlqTarget) {
-                const maxReceiveCount = parseInt(document.getElementById('maxReceiveCount').value);
+            // Add max receive count as attribute
+            queueData.attributes.MaxReceiveCount = maxReceiveCount.toString();
+
+            // Add DLQ configuration if created
+            if (dlqName) {
                 queueData.attributes.RedrivePolicy = JSON.stringify({
-                    deadLetterTargetArn: `arn:aws:sqs:us-east-1:000000000000:${dlqTarget}`,
+                    deadLetterTargetArn: `arn:aws:sqs:us-east-1:000000000000:${dlqName}`,
                     maxReceiveCount: maxReceiveCount
                 });
             }
@@ -770,7 +797,10 @@
                 if (response.ok) {
                     closeModal('createQueueModal');
                     await loadQueues();
-                    alert(`Queue "${queueData.name}" created successfully!`);
+                    const message = dlqName ? 
+                        `Queue "${queueData.name}" and DLQ "${dlqName}" created successfully!` :
+                        `Queue "${queueData.name}" created successfully!`;
+                    alert(message);
                 } else {
                     const error = await response.text();
                     alert(`Failed to create queue: ${error}`);
