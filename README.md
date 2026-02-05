@@ -67,6 +67,52 @@ make build
 make run
 ```
 
+## Shared Networking
+
+Ess-Queue-Ess, ess-three, and Cloudfauxnt are configured to use a shared Docker bridge network for local development. This allows the services to communicate with each other using container names as hostnames.
+
+### Setup
+
+The external bridge network `shared-network` is created once and reused by all services:
+
+```bash
+docker network create shared-network
+```
+
+Each service's `docker-compose.yml` references this external network, allowing them to communicate:
+
+- **Ess-Queue-Ess**: `http://ess-queue-ess:9324`
+- **ess-three**: `http://ess-three:9000`
+- **Cloudfauxnt**: `http://cloudfauxnt:8080`
+
+### Running Multiple Services
+
+Start each service in its own directory:
+
+```bash
+# Terminal 1: Ess Queue Ess
+cd /path/to/ess-queue-ess
+docker-compose up -d
+
+# Terminal 2: ess-three
+cd /path/to/essthree
+docker-compose up -d
+
+# Terminal 3: Cloudfauxnt
+cd /path/to/Cloudfauxnt
+docker-compose up -d
+```
+
+Once running, containers can reach each other by container name:
+
+```bash
+# From inside ess-queue-ess, reach ess-three
+curl http://ess-three:9000/health
+
+# From inside Cloudfauxnt, reach ess-three
+curl http://ess-three:9000/health
+```
+
 ## Usage
 
 ### With AWS SDK (Python boto3)
