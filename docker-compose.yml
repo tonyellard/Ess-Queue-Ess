@@ -10,3 +10,10 @@ services:
       - ./config.yaml:/app/config.yaml:ro
     command: ["./ess-queue-ess", "--config", "/app/config.yaml"]
     container_name: ess-queue-ess
+    networks:
+      - shared-network
+
+networks:
+  shared-network:
+    driver: bridge
+    name: shared-network
