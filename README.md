@@ -83,7 +83,7 @@ Each service's `docker-compose.yml` references this external network, allowing t
 
 - **Ess-Queue-Ess**: `http://ess-queue-ess:9324`
 - **ess-three**: `http://ess-three:9000`
-- **Cloudfauxnt**: `http://cloudfauxnt:8080`
+- **Cloudfauxnt**: `http://cloudfauxnt:9001`
 
 ### Running Multiple Services
 
